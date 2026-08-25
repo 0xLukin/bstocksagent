@@ -84,7 +84,7 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
     return err instanceof Error ? err.message : String(err);
   }
   return [
-    "当前为本地规则回复（未配置 LLM key 也可跑通报价/出意图）。",
+    "当前为本地规则回复（未配置 DEEPSEEK_API_KEY 也可跑通报价/出意图）。",
     `已记录钱包 ${ctx.conversation.wallet}。地理确认=${ctx.conversation.geoConfirmed}，执行确认=${ctx.conversation.userConfirmed}。`,
     "例句：报价 USDT→NVDAB 10 ；加LP NVDAB 0.01 ；价格 NVDAB ；确认执行。",
     `你刚才说：${userText.slice(0, 200)}`,

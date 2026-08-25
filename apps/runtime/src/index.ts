@@ -41,6 +41,11 @@ async function main() {
   });
   listen(app, env.port);
   console.log(`[runtime] intent HTTP on :${env.port}  (POST /chat for local)`);
+  console.log(
+    env.llmKey
+      ? `[runtime] LLM ${env.provider} model=${env.llmModel} base=${env.llmBase}`
+      : "[runtime] LLM unset — rule fallback (set DEEPSEEK_API_KEY)",
+  );
 
   await startA2APoller({
     conversations,

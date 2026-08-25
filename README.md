@@ -62,6 +62,8 @@ curl -s http://127.0.0.1:8787/chat \
 
 建议顺序：地理声明 → 发送 `0x` 钱包 → `报价 USDT→NVDAB 10` → `确认执行` → 打开返回的签名页链接。
 
+自然语言对话需要在 `.env` 填 `DEEPSEEK_API_KEY`（[platform.deepseek.com](https://platform.deepseek.com)），然后重启 Runtime。默认模型 `deepseek-v4-flash`，走 `https://api.deepseek.com/chat/completions`。没 key 时仍可用上面的规则例句。
+
 ### CLI（只读报价 / 生成 calldata，默认不广播）
 
 ```bash
@@ -82,7 +84,9 @@ pnpm lp-intent -- --token NVDAB --amount 0.01 --user 0x你的地址
 | `WALLET_KEY` | **仅** Termix 侧 Agent 钱包。本地 DeFi CLI / 签名页不需要 |
 | `AACP_API` | 默认 `https://platform-backend.prod.termix.live` |
 | `TERMIX_AGENT_ID` | 铸造成功后填入；未设置时 A2A 轮询空转 |
-| `OPENROUTER_API_KEY` 或 `OPENAI_API_KEY` | 工具调用。未设置时 Runtime 走规则回复 |
+| `DEEPSEEK_API_KEY` | 默认 LLM。填了之后 `/chat` 和 Termix A2A 走 DeepSeek 工具调用 |
+| `A2A_LLM_MODEL` | 默认 `deepseek-v4-flash`；要更强改 `deepseek-v4-pro` |
+| `OPENROUTER_API_KEY` / `OPENAI_API_KEY` | 仅当没填 DeepSeek key 时的后备 |
 | `SIGNER_WEB_URL` | 发给买家的签名页前缀。生产：`https://signer-web-phi.vercel.app` |
 | `NEXT_PUBLIC_RUNTIME_URL` | 签名页回读意图 |
 

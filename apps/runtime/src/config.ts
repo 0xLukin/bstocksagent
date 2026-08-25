@@ -2,8 +2,44 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { findRepoRoot } from "@bstocks/chain";
 
+export type LlmProvider = "deepseek" | "openrouter" | "openai" | "none";
+
+export function resolveLlmConfig(env: NodeJS.ProcessEnv = process.env) {
+  const deepseekKey = env.DEEPSEEK_API_KEY?.trim() ?? "";
+  const openrouterKey = env.OPENROUTER_API_KEY?.trim() ?? "";
+  const openaiKey = env.OPENAI_API_KEY?.trim() ?? "";
+  const explicitBase = env.OPENAI_BASE_URL?.trim();
+  const explicitModel = env.A2A_LLM_MODEL?.trim();
+
+  if (deepseekKey) {
+    const baseLooksDeepseek = !explicitBase || explicitBase.includes("deepseek.com");
+    const modelLooksDeepseek = !explicitModel || explicitModel.startsWith("deepseek");
+    return {
+      provider: "deepseek" as const,
+      llmKey: deepseekKey,
+      llmBase: baseLooksDeepseek ? (explicitBase || "https://api.deepseek.com") : "https://api.deepseek.com",
+      llmModel: modelLooksDeepseek ? (explicitModel || "deepseek-v4-flash") : "deepseek-v4-flash",
+    };
+  }
+  if (openrouterKey || openaiKey) {
+    return {
+      provider: (openrouterKey ? "openrouter" : "openai") as LlmProvider,
+      llmKey: openrouterKey || openaiKey,
+      llmBase: explicitBase || "https://openrouter.ai/api/v1",
+      llmModel: explicitModel || "openai/gpt-4o-mini",
+    };
+  }
+  return {
+    provider: "none" as const,
+    llmKey: "",
+    llmBase: "https://api.deepseek.com",
+    llmModel: explicitModel || "deepseek-v4-flash",
+  };
+}
+
 export function loadEnv() {
   const root = findRepoRoot();
+  const llm = resolveLlmConfig();
   return {
     root,
     dataDir: process.env.DATA_DIR ?? join(root, ".data"),
@@ -14,9 +50,7 @@ export function loadEnv() {
     intentTtlMs: Number(process.env.INTENT_TTL_MS ?? "1800000"),
     agentId: process.env.TERMIX_AGENT_ID ?? "",
     agentHandle: process.env.TERMIX_AGENT_HANDLE ?? "bstocks-yield",
-    llmModel: process.env.A2A_LLM_MODEL ?? "openai/gpt-4o-mini",
-    llmBase: process.env.OPENAI_BASE_URL ?? "https://openrouter.ai/api/v1",
-    llmKey: process.env.OPENROUTER_API_KEY || process.env.OPENAI_API_KEY || "",
+    ...llm,
   };
 }
 
