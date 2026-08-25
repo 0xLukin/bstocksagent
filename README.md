@@ -11,6 +11,13 @@ BNB Chain 上的 **非托管** bStocks 交易 + PancakeSwap V3 LP Agent。面向
 
 签名页 **没有** Agent 私钥。合约调用 **只用 raw**；对话和报告用 ERC-8056 UI 股数。
 
+## 仓库与生产签名页
+
+- GitHub（私有）：https://github.com/0xLukin/bstocksagent
+- 签名页 HTTPS：https://signer-web-phi.vercel.app  
+  Runtime 发给买家的链接前缀是 `SIGNER_WEB_URL`（默认即此域名）。意图数据仍由本机/VPS 上的 Runtime 提供；签名页在 HTTPS 下无法回源 `http://127.0.0.1`。
+- 备用别名：https://signer-web-0xxiaochens-projects.vercel.app
+
 ## 要求
 
 - Node 20+
@@ -33,7 +40,7 @@ pnpm test
 # 终端 1 — Agent Runtime（意图存储 + 可选 A2A + 本地 /chat）
 pnpm dev:runtime
 
-# 终端 2 — 签名页 http://127.0.0.1:3000
+# 终端 2 — 本地签名页 http://127.0.0.1:3000（生产域名见下方）
 pnpm dev:signer
 ```
 
@@ -66,7 +73,7 @@ pnpm lp-intent -- --token NVDAB --amount 0.01 --user 0x你的地址
 | `AACP_API` | 默认 `https://platform-backend.prod.termix.live` |
 | `TERMIX_AGENT_ID` | 铸造成功后填入；未设置时 A2A 轮询空转 |
 | `OPENROUTER_API_KEY` 或 `OPENAI_API_KEY` | 工具调用。未设置时 Runtime 走规则回复 |
-| `SIGNER_WEB_URL` | 发给买家的签名页前缀 |
+| `SIGNER_WEB_URL` | 发给买家的签名页前缀。生产：`https://signer-web-phi.vercel.app` |
 | `NEXT_PUBLIC_RUNTIME_URL` | 签名页回读意图 |
 
 Termix 合约地址 **启动时** 从 `GET /api/v1/config/contracts` 拉取，代码里不写死。
