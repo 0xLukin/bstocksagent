@@ -1,5 +1,5 @@
 import { mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { findRepoRoot } from "@bstocks/chain";
 
 export type LlmProvider = "deepseek" | "openrouter" | "openai" | "none";
@@ -42,7 +42,7 @@ export function loadEnv() {
   const llm = resolveLlmConfig();
   return {
     root,
-    dataDir: process.env.DATA_DIR ?? join(root, ".data"),
+    dataDir: resolveDataDir(root, process.env.DATA_DIR),
     port: Number(process.env.RUNTIME_PORT ?? "8787"),
     publicUrl: process.env.RUNTIME_PUBLIC_URL ?? "http://127.0.0.1:8787",
     signerWebUrl: process.env.SIGNER_WEB_URL ?? "http://127.0.0.1:3000",
@@ -52,6 +52,11 @@ export function loadEnv() {
     agentHandle: process.env.TERMIX_AGENT_HANDLE ?? "bstocks-yield",
     ...llm,
   };
+}
+
+export function resolveDataDir(root: string, raw?: string) {
+  if (!raw) return join(root, ".data");
+  return isAbsolute(raw) ? raw : join(root, raw);
 }
 
 export function ensureDataDir(dir: string) {

@@ -1,25 +1,38 @@
-import { SYSTEM_PROMPT } from "./prompt.js";
-import { runLocalCommand } from "./localCommands.js";
+import { buildSystemPrompt } from "./prompt.js";
+import { formatRuntimeState } from "./conversation.js";
+import {
+  formatToolReply,
+  parseBuySell,
+  parseLocalCommand,
+  rememberSwapQuote,
+  runLocalCommand,
+} from "./localCommands.js";
 import { runTool, TOOL_DEFS, type ToolCtx } from "./tools.js";
 
 type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content?: string; tool_call_id?: string; tool_calls?: any[] };
 
 export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBase: string; llmKey: string; llmModel: string }): Promise<string> {
+  const remembered = parseBuySell(userText);
+  if (remembered) rememberSwapQuote(ctx, remembered);
+
   if (!env.llmKey) {
     return await fallbackWithoutLlm(userText, ctx);
   }
 
+  if (parseLocalCommand(userText).kind === "confirm") {
+    const reply = await executeConfirm(userText, ctx);
+    recordTurns(ctx, userText, reply);
+    return reply;
+  }
+
+  const prior = (ctx.conversation.turns ?? []).map((t) => ({
+    role: t.role,
+    content: t.content,
+  }));
   const messages: ChatMsg[] = [
-    { role: "system", content: SYSTEM_PROMPT },
-    {
-      role: "system",
-      content: `当前对话状态：${JSON.stringify({
-        geoConfirmed: ctx.conversation.geoConfirmed,
-        userConfirmed: ctx.conversation.userConfirmed,
-        wallet: ctx.conversation.wallet,
-        lastOrderId: ctx.conversation.lastOrderId,
-      })}`,
-    },
+    { role: "system", content: buildSystemPrompt() },
+    { role: "system", content: formatRuntimeState(ctx.conversation) },
+    ...prior,
     { role: "user", content: userText },
   ];
 
@@ -61,9 +74,26 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
       }
       continue;
     }
-    return msg.content?.trim() || "（空回复）";
+    const reply = msg.content?.trim() || "（空回复）";
+    recordTurns(ctx, userText, reply);
+    return reply;
   }
   return "本轮工具调用次数过多，已停止。请用户再发一条消息。";
+}
+
+async function executeConfirm(userText: string, ctx: ToolCtx): Promise<string> {
+  try {
+    const handled = await runLocalCommand(userText, ctx);
+    return formatToolReply(handled ?? "还没有待确认的报价。请再说一次要买/卖的标的和金额，例如：用 100 USDT 买英伟达。");
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+}
+
+function recordTurns(ctx: ToolCtx, userText: string, reply: string) {
+  ctx.conversations.appendTurn(ctx.conversation.id, "user", userText);
+  ctx.conversations.appendTurn(ctx.conversation.id, "assistant", reply);
+  ctx.conversation.turns = ctx.conversations.get(ctx.conversation.id).turns;
 }
 
 async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<string> {
@@ -79,7 +109,7 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
   }
   try {
     const handled = await runLocalCommand(userText, ctx);
-    if (handled) return handled;
+    if (handled) return formatToolReply(handled);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }

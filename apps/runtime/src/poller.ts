@@ -1,5 +1,6 @@
 import { issueRuntimeToken, pollInbox, replyA2A, signalThinking, walletLogin, type InboxMessage, TermixClient } from "@bstocks/termix";
 import type { ConversationStore } from "./conversation.js";
+import { loadInboxSince, saveInboxSince } from "./inboxCursor.js";
 import { runAgentTurn } from "./llm.js";
 import type { ToolCtx } from "./tools.js";
 import type { IntentStore } from "./intents.js";
@@ -27,17 +28,16 @@ export async function startA2APoller(opts: {
   await issueRuntimeToken(client, opts.agentId);
   console.log(`[a2a] runtime token issued for ${opts.agentId}; polling every ${opts.pollMs}ms`);
 
-  let since = new Date(Date.now() - 60_000).toISOString();
-  const seen = new Set<string>();
+  let since = loadInboxSince(opts.dataDir);
 
   const tick = async () => {
     try {
       const inbox = await pollInbox(client, since);
       for (const msg of inbox) {
         await handleMessage(msg, client, opts);
-        seen.add(msg.messageId);
         if (msg.createdAt > since) since = msg.createdAt;
       }
+      saveInboxSince(opts.dataDir, since);
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err);
       if (text.includes("401")) {
@@ -71,11 +71,9 @@ async function handleMessage(
     llm: { llmBase: string; llmKey: string; llmModel: string };
   },
 ) {
-  const state = opts.conversations.ingestUserText(msg.conversationId, msg.text ?? "");
-  if (msg.orderId) {
-    state.lastOrderId = msg.orderId;
-    opts.conversations.save(state);
-  }
+  if (opts.conversations.alreadySeen(msg.conversationId, msg.messageId)) return;
+  const ingested = opts.conversations.ingestTermixMessage(msg);
+  if (ingested.duplicate) return;
   void signalThinking(termix, msg.conversationId);
   const ctx: ToolCtx = {
     conversation: opts.conversations.get(msg.conversationId),

@@ -18,6 +18,7 @@ type TokensFile = {
   tokens: Array<{
     symbol: string;
     name: string;
+    aliases?: string[];
     address: string;
     decimals: number;
     scaledUi: boolean;
@@ -65,9 +66,33 @@ export function loadTokens(): Map<string, TokenRecord> {
     };
     map.set(rec.symbol, rec);
     map.set(rec.address.toLowerCase(), rec);
+    for (const alias of derivedAliases(rec, t.aliases)) {
+      const existing = map.get(alias);
+      if (existing && existing.symbol !== rec.symbol) {
+        throw new Error(`Token alias collision: ${alias} → ${existing.symbol} vs ${rec.symbol}`);
+      }
+      map.set(alias, rec);
+    }
   }
   tokensCache = map;
   return map;
+}
+
+/** User-facing names (NVDA / bNVDA / 英伟达) map onto the on-chain symbol (NVDAB). */
+function derivedAliases(rec: TokenRecord, extra: string[] | undefined): string[] {
+  const out = new Set<string>();
+  if (rec.kind === "bstock" && rec.symbol.endsWith("B") && rec.symbol.length > 2) {
+    const ticker = rec.symbol.slice(0, -1);
+    out.add(ticker);
+    out.add(`B${ticker}`);
+    out.add(`B${rec.symbol}`);
+  }
+  if (rec.symbol === "WBNB") out.add("BNB");
+  for (const a of extra ?? []) {
+    const key = a.trim().toUpperCase();
+    if (key && key !== rec.symbol) out.add(key);
+  }
+  return [...out];
 }
 
 export function loadPoolsFile(): PoolsFile {
@@ -88,14 +113,41 @@ export function pancakeFromConfig(): PancakeAddresses {
   };
 }
 
+export function lookupKey(symbolOrAddress: string): string {
+  const raw = symbolOrAddress.trim();
+  if (!raw) return "";
+  return raw.startsWith("0x") ? getAddress(raw).toLowerCase() : raw.toUpperCase();
+}
+
 export function getToken(symbolOrAddress: string): TokenRecord {
   const map = loadTokens();
-  const key = symbolOrAddress.startsWith("0x")
-    ? getAddress(symbolOrAddress).toLowerCase()
-    : symbolOrAddress.toUpperCase();
-  const rec = map.get(key);
+  const rec = map.get(lookupKey(symbolOrAddress));
   if (!rec) throw new Error(`Token not on whitelist: ${symbolOrAddress}`);
   return rec;
+}
+
+export function aliasesFor(symbolOrAddress: string): string[] {
+  const rec = getToken(symbolOrAddress);
+  const out: string[] = [];
+  for (const [k, v] of loadTokens()) {
+    if (v.symbol !== rec.symbol) continue;
+    if (k === rec.symbol || k === rec.address.toLowerCase()) continue;
+    out.push(k);
+  }
+  return out.sort((a, b) => a.length - b.length || a.localeCompare(b));
+}
+
+export function formatWhitelistForPrompt(): string {
+  const lines = listTokens().map((t) => {
+    const aliases = aliasesFor(t.symbol);
+    const aka = aliases.length ? `（也称 ${aliases.join(" / ")}）` : "";
+    return `- ${t.symbol}${aka}：${t.name}`;
+  });
+  return [
+    "当前白名单（链上 symbol 在前）。用户说 NVDA、bNVDA、英伟达、NVIDIA 时一律按 NVDAB 处理，其它标的同理。",
+    "先调用 get_bstock_price / quote_swap，禁止在未查工具时断言「不在白名单」。白名单没有 AAPL、COIN、bAAPL、bCOIN。",
+    ...lines,
+  ].join("\n");
 }
 
 export function isWhitelisted(symbolOrAddress: string): boolean {

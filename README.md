@@ -64,6 +64,16 @@ curl -s http://127.0.0.1:8787/chat \
 
 自然语言对话需要在 `.env` 填 `DEEPSEEK_API_KEY`（[platform.deepseek.com](https://platform.deepseek.com)），然后重启 Runtime。默认模型 `deepseek-v4-flash`，走 `https://api.deepseek.com/chat/completions`。没 key 时仍可用上面的规则例句。
 
+### 对话记忆（Termix 不会给历史）
+
+Termix A2A inbox **每条只有买家的新一句**（`messageId` 作幂等键，`conversationId` 是线程）。平台不提供会话回放 API，所以 Runtime 按 `conversationId` 自己持久化：
+
+1. **记忆卡**：地理声明、买家钱包（inbox `from.walletAddress` 或用户粘贴的 `0x`）、待执行报价、最近签名页、`orderId`
+2. **逐轮 transcript**：最近 24 轮 user/assistant，塞进下一次 LLM 调用
+3. **inbox 游标 + seen IDs**：重启不会把同一条再答一遍；同一 `orderId` 的新线程会继承钱包/地理/待执行单
+
+本地 `/chat` 用同一个存储；`conversationId` 默认 `local`。数据在仓库根目录 `.data/conversations/`（不要用 `apps/runtime/.data`）。
+
 ### CLI（只读报价 / 生成 calldata，默认不广播）
 
 ```bash
@@ -130,6 +140,6 @@ Termix **没有** auto-settle worker。订单 `DELIVERED` 且挑战窗口结束�
 
 ## 代币与 Pancake 地址
 
-`config/tokens.json` 中的 bStocks / USDT / USDC / WBNB 已在 2026-08-26 用 BSC `symbol()` 核对。Pancake 地址与官方文档一致（SmartRouter / NFPM / QuoterV2 / Factory），见 `config/pools.json` 注释。
+`config/tokens.json` 中的 bStocks / USDT / USDC / WBNB 已在 2026-08-26 用 BSC `symbol()` 核对。链上 symbol 是 `NVDAB`；用户说的 `NVDA` / `bNVDA` / `英伟达` 会映射到同一条记录。Pancake 地址与官方文档一致（SmartRouter / NFPM / QuoterV2 / Factory），见 `config/pools.json` 注释。
 
 未做主网真钱 swap。报价依赖公共 RPC，偶发超时属正常。

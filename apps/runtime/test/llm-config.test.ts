@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveLlmConfig } from "../src/config.js";
+import { resolveDataDir, resolveLlmConfig } from "../src/config.js";
 
 describe("resolveLlmConfig", () => {
   it("prefers DeepSeek and ignores leftover OpenRouter defaults", () => {
@@ -32,5 +32,11 @@ describe("resolveLlmConfig", () => {
 
   it("is none without any key", () => {
     expect(resolveLlmConfig({}).provider).toBe("none");
+  });
+
+  it("resolves relative DATA_DIR against the repo root", () => {
+    expect(resolveDataDir("/repo", ".data")).toBe("/repo/.data");
+    expect(resolveDataDir("/repo", "/abs/data")).toBe("/abs/data");
+    expect(resolveDataDir("/repo")).toBe("/repo/.data");
   });
 });

@@ -35,11 +35,12 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "get_bstock_price",
-      description: "Read a whitelist bStock mid price via V3 quote of 1 quote unit.",
+      description:
+        "Read a whitelist bStock mid price via V3 quote of 1 quote unit. token accepts on-chain symbols or aliases (NVDAB, NVDA, bNVDA, 英伟达).",
       parameters: {
         type: "object",
         properties: {
-          token: { type: "string" },
+          token: { type: "string", description: "NVDAB or alias such as NVDA / bNVDA / 英伟达" },
           quote: { type: "string" },
         },
         required: ["token"],
@@ -78,7 +79,8 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "create_swap_intent",
-      description: "Create a user-signed swap intent. Requires geo + explicit confirm.",
+      description:
+        "Create a user-signed swap intent from the pending quote. Requires geo + explicit confirm. If lastQuote exists, call this immediately on 确认 — do not re-ask the pair or amount.",
       parameters: {
         type: "object",
         properties: {
@@ -159,6 +161,14 @@ export const TOOL_DEFS = [
   },
 ] as const;
 
+function rememberCreatedIntent(
+  ctx: ToolCtx,
+  intent: { id: string; kind: string; signerUrl: string; summary?: Record<string, unknown> },
+) {
+  ctx.conversations.rememberIntent(ctx.conversation.id, intent);
+  ctx.conversation.lastIntent = ctx.conversations.get(ctx.conversation.id).lastIntent;
+}
+
 function gate(state: ConversationState) {
   if (!state.geoConfirmed) {
     throw new Error("地理确认未完成：请用户声明不在美国及受限地区后再执行。");
@@ -199,11 +209,12 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   const client = ctx.client ?? getPublicClient();
 
   if (name === "get_bstock_price") {
-    const token = String(args.token);
-    const quote = String(args.quote ?? "USDT");
+    const token = getToken(String(args.token)).symbol;
+    const quote = getToken(String(args.quote ?? "USDT")).symbol;
     const q = await quoteSwap({ tokenIn: quote, tokenOut: token, amountInUi: "1", client });
     return JSON.stringify({
       token,
+      requested: String(args.token),
       quote,
       uiPriceApprox: q.amountOutUi,
       rawOut: q.amountOutRaw.toString(),
@@ -220,6 +231,13 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       amountInUi: String(args.amountInUi),
       client,
     });
+    ctx.conversation.lastQuote = {
+      tokenIn: q.tokenIn.symbol,
+      tokenOut: q.tokenOut.symbol,
+      amountInUi: q.amountInUi,
+    };
+    delete ctx.conversation.lastLp;
+    ctx.conversations.save(ctx.conversation);
     return JSON.stringify({
       ...q,
       amountInRaw: q.amountInRaw.toString(),
@@ -275,9 +293,14 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       risks: [...verdict.warnings, ...built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : []],
     });
     ctx.conversations.consumeConfirm(ctx.conversation.id);
+    ctx.conversations.clearPending(ctx.conversation.id);
+    delete ctx.conversation.lastQuote;
+    ctx.conversation.userConfirmed = false;
+    const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
+    rememberCreatedIntent(ctx, { id: intent.id, kind: "swap", signerUrl, summary: intent.summary });
     return JSON.stringify({
       intentId: intent.id,
-      signerUrl: `${ctx.signerWebUrl}/t/${intent.id}`,
+      signerUrl,
       expiresAt: intent.expiresAt,
       summary: intent.summary,
     });
@@ -298,7 +321,11 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         risks: ["收取手续费不会移除本金，但需用户自行签名。"],
       });
       ctx.conversations.consumeConfirm(ctx.conversation.id);
-      return JSON.stringify({ intentId: intent.id, signerUrl: `${ctx.signerWebUrl}/t/${intent.id}` });
+      ctx.conversations.clearPending(ctx.conversation.id);
+      ctx.conversation.userConfirmed = false;
+      const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
+      rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-collect", signerUrl, summary: { tokenId: String(tokenId) } });
+      return JSON.stringify({ intentId: intent.id, signerUrl });
     }
     if (!args.amountTokenUi) throw new Error("amountTokenUi required for mint");
     const built = await buildMintLpTxs({
@@ -335,7 +362,12 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       risks: [...verdict.warnings, ...built.analysis.warnings],
     });
     ctx.conversations.consumeConfirm(ctx.conversation.id);
-    return JSON.stringify({ intentId: intent.id, signerUrl: `${ctx.signerWebUrl}/t/${intent.id}` });
+    ctx.conversations.clearPending(ctx.conversation.id);
+    delete ctx.conversation.lastLp;
+    ctx.conversation.userConfirmed = false;
+    const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
+    rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-mint", signerUrl, summary: intent.summary });
+    return JSON.stringify({ intentId: intent.id, signerUrl });
   }
 
   if (name === "verify_tx") {

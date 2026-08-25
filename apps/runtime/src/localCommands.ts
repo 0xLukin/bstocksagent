@@ -1,3 +1,5 @@
+import { getToken } from "@bstocks/chain";
+import type { PendingQuote } from "./conversation.js";
 import { runTool, type ToolCtx } from "./tools.js";
 
 export type LocalCmd =
@@ -7,9 +9,94 @@ export type LocalCmd =
   | { kind: "confirm" }
   | { kind: "none" };
 
-const PAIR = /(?:报价|quote)\s+([A-Za-z0-9]+)\s*(?:→|->|=>|to|换|兑)?\s*([A-Za-z0-9]+)\s+([\d.]+)/i;
-const PRICE = /(?:价格|price)\s+([A-Za-z0-9]+)(?:\s*\/\s*([A-Za-z0-9]+))?/i;
-const LP = /(?:加lp|加池|analyze[_\s-]?lp|分析)\s+([A-Za-z0-9]+)(?:\s+([\d.]+))?(?:\s+([\d.]+))?/i;
+const TOK = "[A-Za-z0-9\\u4e00-\\u9fff]+";
+const PAIR = new RegExp(
+  `(?:报价|quote)\\s+(${TOK})\\s*(?:→|->|=>|to|换|兑)?\\s*(${TOK})\\s+([\\d.]+)`,
+  "i",
+);
+const PRICE = new RegExp(`(?:价格|price)\\s+(${TOK})(?:\\s*/\\s*(${TOK}))?`, "i");
+const PRICE_LOOSE = new RegExp(
+  `(?:查看|查一下|看看|查下)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:的)?(?:报价|价格|行情)`,
+  "i",
+);
+const LP = new RegExp(
+  `(?:加lp|加池|analyze[_\\s-]?lp|分析)\\s+(${TOK})(?:\\s+([\\d.]+))?(?:\\s+([\\d.]+))?`,
+  "i",
+);
+
+export function parseBuySell(text: string): PendingQuote | null {
+  const t = text.trim();
+  const spend = t.match(
+    new RegExp(
+      `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
+      "i",
+    ),
+  );
+  if (spend) {
+    return { tokenIn: "USDT", tokenOut: spend[3]!, amountInUi: spend[1]! };
+  }
+  const buy = t.match(
+    new RegExp(`(?:买|买入|要买|购入)\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:的|得)?\\s*(${TOK})`, "i"),
+  );
+  if (buy) {
+    return { tokenIn: "USDT", tokenOut: buy[3]!, amountInUi: buy[1]! };
+  }
+  const sell = t.match(
+    new RegExp(`(?:卖|卖出)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:个|股)?\\s*(?:的)?\\s*(${TOK})(?:\\s*(?:换|成|得)\\s*(u|usdt|usd))?`, "i"),
+  );
+  if (sell) {
+    return { tokenIn: sell[2]!, tokenOut: "USDT", amountInUi: sell[1]! };
+  }
+  return null;
+}
+
+export function rememberSwapQuote(ctx: ToolCtx, quote: PendingQuote) {
+  ctx.conversation.lastQuote = {
+    tokenIn: canonSymbol(quote.tokenIn),
+    tokenOut: canonSymbol(quote.tokenOut),
+    amountInUi: quote.amountInUi,
+  };
+  delete ctx.conversation.lastLp;
+  ctx.conversations.save(ctx.conversation);
+}
+
+function canonSymbol(symbol: string): string {
+  try {
+    return getToken(symbol).symbol;
+  } catch {
+    return symbol.trim().toUpperCase();
+  }
+}
+
+export function formatToolReply(raw: string): string {
+  try {
+    const data = JSON.parse(raw) as {
+      signerUrl?: string;
+      error?: string;
+      blockers?: string[];
+      summary?: { tokenIn?: string; tokenOut?: string; amountInUi?: string; amountOutUi?: string };
+    };
+    if (data.error === "risk_blocked") {
+      return ["风控未通过，没有生成签名页。", ...(data.blockers ?? [])].join("\n");
+    }
+    if (data.signerUrl) {
+      const s = data.summary ?? {};
+      const pair =
+        s.tokenIn && s.tokenOut ? `${s.amountInUi ?? ""} ${s.tokenIn} → 约 ${s.amountOutUi ?? "?"} ${s.tokenOut}` : "";
+      return [
+        "已按你上一笔确认的报价生成待签意图（不是投资建议）。",
+        pair.trim(),
+        `签名页：${data.signerUrl}`,
+        "请用绑定钱包核对地址、滑点和 raw 后再签名。过期需重新报价。",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+  } catch {
+    /* plain text */
+  }
+  return raw;
+}
 
 export function parseLocalCommand(text: string): LocalCmd {
   const t = text.trim();
@@ -20,7 +107,7 @@ export function parseLocalCommand(text: string): LocalCmd {
   if (quote) {
     return { kind: "quote", tokenIn: quote[1]!, tokenOut: quote[2]!, amountInUi: quote[3]! };
   }
-  const price = t.match(PRICE);
+  const price = t.match(PRICE) ?? t.match(PRICE_LOOSE);
   if (price) {
     return { kind: "price", token: price[1]!, quote: price[2] ?? "USDT" };
   }
@@ -40,12 +127,11 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
   }
 
   if (cmd.kind === "quote") {
-    ctx.conversation.lastQuote = {
+    rememberSwapQuote(ctx, {
       tokenIn: cmd.tokenIn,
       tokenOut: cmd.tokenOut,
       amountInUi: cmd.amountInUi,
-    };
-    ctx.conversations.save(ctx.conversation);
+    });
     const quoted = await runTool(
       "quote_swap",
       JSON.stringify({ tokenIn: cmd.tokenIn, tokenOut: cmd.tokenOut, amountInUi: cmd.amountInUi }),
