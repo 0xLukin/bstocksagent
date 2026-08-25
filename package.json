@@ -1,0 +1,31 @@
+{
+  "name": "bstocksagent",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.14.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "pnpm -r --if-present build",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "test": "pnpm -r --if-present test",
+    "lint": "eslint .",
+    "dev:runtime": "pnpm --filter @bstocks/runtime dev",
+    "dev:signer": "pnpm --filter @bstocks/signer-web dev",
+    "quote": "pnpm --filter @bstocks/chain quote",
+    "swap-intent": "pnpm --filter @bstocks/chain swap-intent",
+    "lp-intent": "pnpm --filter @bstocks/chain lp-intent",
+    "termix:mint": "pnpm --filter @bstocks/runtime termix:mint",
+    "termix:listing": "pnpm --filter @bstocks/runtime termix:listing",
+    "termix:accept": "pnpm --filter @bstocks/runtime termix:accept",
+    "termix:deliver": "pnpm --filter @bstocks/runtime termix:deliver",
+    "termix:claim-watch": "pnpm --filter @bstocks/runtime termix:claim-watch"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.34.0",
+    "eslint": "^9.34.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.41.0"
+  }
+}

@@ -1,0 +1,14 @@
+node_modules
+dist
+.next
+.turbo
+.cache
+coverage
+*.log
+.env
+.env.local
+.env.*.local
+.data
+.DS_Store
+*.tsbuildinfo
+apps/signer-web/next-env.d.ts

@@ -1,0 +1,31 @@
+{
+  "name": "@bstocks/runtime",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "termix:mint": "tsx src/scripts/mint-agent.ts",
+    "termix:listing": "tsx src/scripts/publish-listing.ts",
+    "termix:accept": "tsx src/scripts/provider-accept.ts",
+    "termix:deliver": "tsx src/scripts/submit-delivery.ts",
+    "termix:claim-watch": "tsx src/scripts/claim-watchdog.ts"
+  },
+  "dependencies": {
+    "@bstocks/chain": "workspace:*",
+    "@bstocks/report": "workspace:*",
+    "@bstocks/risk": "workspace:*",
+    "@bstocks/termix": "workspace:*",
+    "@hono/node-server": "^1.19.1",
+    "hono": "^4.9.6",
+    "viem": "^2.33.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "@bstocks/chain",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "quote": "tsx src/cli.ts quote",
+    "swap-intent": "tsx src/cli.ts swap-intent",
+    "lp-intent": "tsx src/cli.ts lp-intent"
+  },
+  "dependencies": {
+    "viem": "^2.33.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}

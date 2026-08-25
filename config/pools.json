@@ -1,0 +1,44 @@
+{
+  "chainId": 56,
+  "notes": [
+    "PancakeSwap V3 addresses reconfirmed against https://developer.pancakeswap.finance/contracts/v3/addresses and https://docs.pancakeswap.finance/trading-tools/building-trading-agents-on-pancakeswap-v3 (2026-08-26).",
+    "MVP is V3 only. Single-hop whitelist pairs first; Smart Router used as fallback.",
+    "Pool addresses are resolved via Factory.getPool(token, quote, fee) at runtime when omitted.",
+    "NVDAB/USDT 0.25% is the documented flagship pair."
+  ],
+  "pancake": {
+    "smartRouter": "0x13f4EA83D0bd40E75C8222255bc855a974568Dd4",
+    "nfpm": "0x46A15B0b27311cedF172AB29E4f4766fbE7F4364",
+    "quoterV2": "0xB048Bbc1Ee6b733FFfCFb9e9CeF7375518e25997",
+    "factory": "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+    "swapRouterV3": "0x1b81D678ffb9C0263b24A97847620C99d213eB14",
+    "permit2": "0x31c2F6fcFf4F8759b3Bd5Bf0e1084A055615c768"
+  },
+  "feeTiers": [100, 500, 2500, 10000],
+  "preferredFee": 2500,
+  "quotePriority": ["USDT", "USDC", "WBNB"],
+  "pools": [
+    {
+      "id": "NVDAB-USDT-2500",
+      "token": "NVDAB",
+      "quote": "USDT",
+      "fee": 2500,
+      "address": "0x8FB4243b553aC29BA088aCf00B9B7dA24bD6690C",
+      "source": "https://pancakeswap.finance/info/v3/pairs/0x8fb4243b553ac29ba088acf00b9b7da24bd6690c"
+    },
+    { "id": "TSLAB-USDT-2500", "token": "TSLAB", "quote": "USDT", "fee": 2500 },
+    { "id": "CRCLB-USDT-2500", "token": "CRCLB", "quote": "USDT", "fee": 2500 },
+    { "id": "MUB-USDT-2500", "token": "MUB", "quote": "USDT", "fee": 2500 },
+    { "id": "SNDKB-USDT-2500", "token": "SNDKB", "quote": "USDT", "fee": 2500 },
+    { "id": "SPCXB-USDT-2500", "token": "SPCXB", "quote": "USDT", "fee": 2500 },
+    { "id": "AMDB-USDT-2500", "token": "AMDB", "quote": "USDT", "fee": 2500 },
+    { "id": "EWYB-USDT-2500", "token": "EWYB", "quote": "USDT", "fee": 2500 },
+    { "id": "INTCB-USDT-2500", "token": "INTCB", "quote": "USDT", "fee": 2500 },
+    { "id": "MSTRB-USDT-2500", "token": "MSTRB", "quote": "USDT", "fee": 2500 },
+    { "id": "LITEB-USDT-2500", "token": "LITEB", "quote": "USDT", "fee": 2500 },
+    { "id": "METAB-USDT-2500", "token": "METAB", "quote": "USDT", "fee": 2500 },
+    { "id": "MSFTB-USDT-2500", "token": "MSFTB", "quote": "USDT", "fee": 2500 },
+    { "id": "PLTRB-USDT-2500", "token": "PLTRB", "quote": "USDT", "fee": 2500 },
+    { "id": "QQQB-USDT-2500", "token": "QQQB", "quote": "USDT", "fee": 2500 }
+  ]
+}

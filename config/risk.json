@@ -1,0 +1,13 @@
+{
+  "maxSlippageBps": 80,
+  "defaultSlippageBps": 50,
+  "maxNotionalUsd": 2000,
+  "minPoolLiquidityUsd": 5000,
+  "maxPriceDeviationBps": 150,
+  "deadlineSeconds": 180,
+  "restrictedGeos": ["US"],
+  "requireGeoConfirm": true,
+  "requireUserConfirmBeforeIntent": true,
+  "rejectZeroAmountMin": true,
+  "boundedApproveOnly": true
+}
