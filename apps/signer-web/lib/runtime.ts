@@ -19,12 +19,22 @@ export type RemoteIntent = {
   risks: string[];
   simulation: { ok: boolean; notes: string[] };
   txHashes: string[];
+  conversationId?: string;
+  cancelledAt?: string;
 };
 
 export async function fetchIntent(id: string): Promise<RemoteIntent> {
   const res = await fetch(`${RUNTIME}/intents/${id}`, { cache: "no-store" });
   if (!res.ok) throw new Error("找不到该意图，或 Runtime 未启动");
   return (await res.json()) as RemoteIntent;
+}
+
+export async function cancelIntent(id: string): Promise<RemoteIntent> {
+  const res = await fetch(`${RUNTIME}/intents/${id}/cancel`, { method: "POST" });
+  const json = (await res.json()) as { intent?: RemoteIntent; error?: string };
+  if (!res.ok) throw new Error(json.error ?? "取消失败");
+  if (!json.intent) throw new Error("取消失败");
+  return json.intent;
 }
 
 export async function reportTx(id: string, txHash: string, address: string) {

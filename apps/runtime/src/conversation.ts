@@ -5,7 +5,18 @@ import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
 import type { InboxMessage } from "@bstocks/termix";
 
 export type PendingQuote = { tokenIn: string; tokenOut: string; amountInUi: string };
-export type PendingLp = { token: string; amountTokenUi?: string; amountQuoteUi?: string };
+export type PendingLp = {
+  token: string;
+  amountTokenUi?: string;
+  amountQuoteUi?: string;
+  budgetQuoteUi?: string;
+  rangeBps?: number;
+  fee?: number;
+  collectTokenId?: string;
+  increaseTokenId?: string;
+  decreaseTokenId?: string;
+  decreaseBps?: number;
+};
 export type ChatTurn = { role: "user" | "assistant"; content: string; at?: string; messageId?: string };
 export type LastIntent = {
   id: string;
@@ -13,6 +24,7 @@ export type LastIntent = {
   signerUrl: string;
   summary?: Record<string, unknown>;
   createdAt: string;
+  cancelled?: boolean;
 };
 
 export type ConversationState = {
@@ -126,6 +138,16 @@ export class ConversationStore {
     return s;
   }
 
+  cancelPending(id: string) {
+    const s = this.get(id);
+    s.userConfirmed = false;
+    delete s.lastQuote;
+    delete s.lastLp;
+    if (s.lastIntent) s.lastIntent = { ...s.lastIntent, cancelled: true };
+    this.save(s);
+    return s;
+  }
+
   rememberIntent(id: string, intent: Omit<LastIntent, "createdAt"> & { createdAt?: string }) {
     const s = this.get(id);
     s.lastIntent = {
@@ -201,16 +223,36 @@ export function formatRuntimeState(state: ConversationState): string {
     lines.push(
       `待执行兑换：${q.amountInUi} ${q.tokenIn} → ${q.tokenOut}。用户说「确认」后必须立即 create_swap_intent（用这组参数），禁止再问买还是卖、禁止再要金额。`,
     );
-  } else if (state.lastLp?.amountTokenUi) {
+  } else if (state.lastLp?.collectTokenId) {
     lines.push(
-      `待执行加池：${state.lastLp.amountTokenUi} ${state.lastLp.token}。用户说「确认」后必须立即 create_lp_intent，禁止再问操作类型。`,
+      `待收取手续费：NFT #${state.lastLp.collectTokenId}。用户说「确认」后必须立即 create_lp_intent（collectTokenId），禁止再问操作类型。`,
+    );
+  } else if (state.lastLp?.decreaseTokenId) {
+    lines.push(
+      `待撤出仓位：NFT #${state.lastLp.decreaseTokenId} ${state.lastLp.decreaseBps ?? 10000} bps。用户说「确认」后必须立即 create_lp_intent。`,
+    );
+  } else if (state.lastLp?.increaseTokenId && state.lastLp.amountTokenUi) {
+    lines.push(
+      `待加仓：NFT #${state.lastLp.increaseTokenId} + ${state.lastLp.amountTokenUi} ${state.lastLp.token}。用户说「确认」后必须立即 create_lp_intent。`,
+    );
+  } else if (state.lastLp?.amountTokenUi || state.lastLp?.amountQuoteUi || state.lastLp?.budgetQuoteUi) {
+    const lp = state.lastLp;
+    const size = lp.budgetQuoteUi
+      ? `预算约 ${lp.budgetQuoteUi} USDT`
+      : [lp.amountTokenUi && `${lp.amountTokenUi} ${lp.token}`, lp.amountQuoteUi && `${lp.amountQuoteUi} USDT`]
+          .filter(Boolean)
+          .join(" + ");
+    lines.push(
+      `待执行加池：${size}。用户说「确认」后必须立即 create_lp_intent（用记忆卡 lastLp），禁止再问操作类型。`,
     );
   } else {
     lines.push(
-      "当前没有待执行报价。用户只说「确认」且无待执行报价时，请对方用一句话重述标的和金额，不要展开成问卷。",
+      "当前没有待执行报价。用户只说「确认」且无待执行报价时，请对方用一句话重述标的和金额，不要展开成问卷。用户说「取消」时不要再追问。",
     );
   }
-  if (state.lastIntent?.signerUrl) {
+  if (state.lastIntent?.cancelled) {
+    lines.push("上一笔签名页已取消，不要再发那个链接。");
+  } else if (state.lastIntent?.signerUrl) {
     lines.push(`最近已生成的签名页（用户问「链接呢」就直接给）：${state.lastIntent.signerUrl}`);
   }
   if (state.wallet) {

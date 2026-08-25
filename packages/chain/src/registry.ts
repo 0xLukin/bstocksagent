@@ -145,7 +145,7 @@ export function formatWhitelistForPrompt(): string {
   });
   return [
     "当前白名单（链上 symbol 在前）。用户说 NVDA、bNVDA、英伟达、NVIDIA 时一律按 NVDAB 处理，其它标的同理。",
-    "先调用 get_bstock_price / quote_swap，禁止在未查工具时断言「不在白名单」。白名单没有 AAPL、COIN、bAAPL、bCOIN。",
+    "先调用 get_bstock_price / quote_swap，禁止在未查工具时断言「不在白名单」。get_bstock_price 返回 1 股值多少报价资产。白名单没有 AAPL、COIN、bAAPL、bCOIN。",
     ...lines,
   ].join("\n");
 }

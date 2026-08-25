@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAddress, isAddress, type Address, type Hex } from "viem";
 import type { PreparedTx } from "@bstocks/chain";
@@ -11,6 +11,8 @@ export type StoredIntent = {
   chainId: 56;
   createdAt: string;
   expiresAt: string;
+  conversationId?: string;
+  cancelledAt?: string;
   txs: Array<{ to: Address; data: Hex; value: string; label: string }>;
   summary: Record<string, unknown>;
   risks: string[];
@@ -24,6 +26,9 @@ export function assertIntentBinding(intent: StoredIntent, connected: string): vo
   }
   if (getAddress(connected) !== getAddress(intent.userAddress)) {
     throw new Error("连接钱包与意图绑定地址不一致，已拒绝签名");
+  }
+  if (intent.cancelledAt) {
+    throw new Error("这笔意图已取消，不会再签名");
   }
   if (Date.parse(intent.expiresAt) <= Date.now()) {
     throw new Error("意图已过期，请让 Agent 重新生成");
@@ -47,6 +52,7 @@ export class IntentStore {
     summary: Record<string, unknown>;
     risks: string[];
     simulationNotes?: string[];
+    conversationId?: string;
   }): StoredIntent {
     const id = randomUUID();
     const now = new Date();
@@ -57,6 +63,7 @@ export class IntentStore {
       chainId: 56,
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + this.ttlMs).toISOString(),
+      conversationId: input.conversationId,
       txs: input.txs.map((t) => ({
         to: t.to,
         data: t.data,
@@ -78,6 +85,19 @@ export class IntentStore {
     return JSON.parse(readFileSync(p, "utf8")) as StoredIntent;
   }
 
+  cancel(id: string): StoredIntent {
+    const intent = this.get(id);
+    if (!intent) throw new Error("intent not found");
+    if (intent.txs.length > 0 && intent.txHashes.length >= intent.txs.length) {
+      throw new Error("已经广播完成，无法取消链上成交。若要反向，请再说一笔卖出。");
+    }
+    if (!intent.cancelledAt) {
+      intent.cancelledAt = new Date().toISOString();
+      writeFileSync(this.file(id), JSON.stringify(intent, null, 2));
+    }
+    return intent;
+  }
+
   recordTx(id: string, hash: Hex, connected: string): StoredIntent {
     const intent = this.get(id);
     if (!intent) throw new Error("intent not found");
@@ -88,7 +108,10 @@ export class IntentStore {
   }
 
   list(): StoredIntent[] {
-    // used by reports
-    return [];
+    if (!existsSync(this.dir)) return [];
+    return readdirSync(this.dir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => this.get(name.slice(0, -5)))
+      .filter((intent): intent is StoredIntent => Boolean(intent));
   }
 }

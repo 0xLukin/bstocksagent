@@ -1,8 +1,6 @@
 /** Uniswap V3 / Pancake V3 tick helpers used for LP range selection. */
 
-export const MIN_TICK = -887272;
-export const MAX_TICK = 887272;
-export const Q96 = 2n ** 96n;
+import { MAX_TICK, MIN_TICK } from "./liquidity.js";
 
 export function nearestUsableTick(tick: number, tickSpacing: number): number {
   if (tickSpacing <= 0) throw new Error("tickSpacing must be > 0");
@@ -24,7 +22,7 @@ export function priceFromTick(tick: number): number {
 
 /**
  * Build a symmetric % band around the current tick.
- * rangeBps=1000 → ±10% in price space.
+ * rangeBps=3000 → ±30% in price space.
  */
 export function rangeAroundTick(
   currentTick: number,

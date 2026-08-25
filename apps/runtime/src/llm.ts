@@ -1,6 +1,7 @@
 import { buildSystemPrompt } from "./prompt.js";
 import { formatRuntimeState } from "./conversation.js";
 import {
+  cancelPendingTrade,
   formatToolReply,
   parseBuySell,
   parseLocalCommand,
@@ -12,6 +13,19 @@ import { runTool, TOOL_DEFS, type ToolCtx } from "./tools.js";
 type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content?: string; tool_call_id?: string; tool_calls?: any[] };
 
 export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBase: string; llmKey: string; llmModel: string }): Promise<string> {
+  const localKind = parseLocalCommand(userText).kind;
+  if (localKind === "cancel") {
+    const reply = cancelPendingTrade(ctx);
+    recordTurns(ctx, userText, reply);
+    return reply;
+  }
+  if (localKind === "positions" || localKind === "collect" || localKind === "decrease" || localKind === "lp") {
+    const handled = await runLocalCommand(userText, ctx);
+    const reply = formatToolReply(handled ?? "做不到这一步。");
+    recordTurns(ctx, userText, reply);
+    return reply;
+  }
+
   const remembered = parseBuySell(userText);
   if (remembered) rememberSwapQuote(ctx, remembered);
 
@@ -116,7 +130,7 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
   return [
     "当前为本地规则回复（未配置 DEEPSEEK_API_KEY 也可跑通报价/出意图）。",
     `已记录钱包 ${ctx.conversation.wallet}。地理确认=${ctx.conversation.geoConfirmed}，执行确认=${ctx.conversation.userConfirmed}。`,
-    "例句：报价 USDT→NVDAB 10 ；加LP NVDAB 0.01 ；价格 NVDAB ；确认执行。",
+    "例句：报价 USDT→NVDAB 10 ；加LP NVDAB 0.01 ；价格 NVDAB ；我的仓位 ；收手续费 ；确认执行。",
     `你刚才说：${userText.slice(0, 200)}`,
   ].join("\n");
 }

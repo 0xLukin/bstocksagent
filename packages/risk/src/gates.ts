@@ -63,9 +63,23 @@ export function latchGeoConfirm(current: boolean, statement: string): boolean {
   return current || affirmed;
 }
 
-export function latchUserConfirm(current: boolean, statement: string): boolean {
+export function isUserCancel(statement: string): boolean {
+  return /^(我)?(取消|不要了|算了|cancel)((这笔|本次|以上)?(兑换|交易|执行|订单|报价|加池)?)?[。.!！]?$/i.test(
+    statement.trim(),
+  );
+}
+
+export function isUserConfirm(statement: string): boolean {
   const t = statement.trim();
-  if (/^(确认|同意|确认执行|confirm|yes,?\s*do it|proceed)$/i.test(t)) return true;
-  if (/确认(本次|以上|这笔|swap|lp|交易)/i.test(t)) return true;
+  if (/^(确定|好的?|可以|行|嗯|ok|okay|yes)$/i.test(t)) return true;
+  if (/^(我)?(确认|同意)(执行)?$/i.test(t)) return true;
+  if (/^(confirm|proceed|yes,?\s*do it)$/i.test(t)) return true;
+  if (/确认(本次|以上|这笔|swap|lp|交易|执行)/i.test(t)) return true;
+  return false;
+}
+
+export function latchUserConfirm(current: boolean, statement: string): boolean {
+  if (isUserCancel(statement)) return false;
+  if (isUserConfirm(statement)) return true;
   return current;
 }

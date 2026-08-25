@@ -140,7 +140,7 @@ async function main() {
       fee,
       amountTokenUi: req(values, "amount"),
       amountQuoteUi: values["amount-quote"],
-      rangeBps: values.range ? Number(values.range) : 1000,
+      rangeBps: values.range ? Number(values.range) : undefined,
       slippageBps: slippage,
       deadlineSeconds: deadline,
       client,

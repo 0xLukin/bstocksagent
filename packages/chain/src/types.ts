@@ -50,7 +50,13 @@ export type SwapQuote = {
   sqrtPriceX96After?: bigint;
 };
 
-export type IntentKind = "swap" | "lp-mint" | "lp-collect" | "approve";
+export type IntentKind =
+  | "swap"
+  | "lp-mint"
+  | "lp-collect"
+  | "lp-increase"
+  | "lp-decrease"
+  | "approve";
 
 export type UserIntent = {
   id: string;

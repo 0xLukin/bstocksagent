@@ -3,6 +3,8 @@ export * from "./client.js";
 export * from "./scaled.js";
 export * from "./registry.js";
 export * from "./ticks.js";
+export * from "./liquidity.js";
+export * from "./valuation.js";
 export * from "./quote.js";
 export * from "./swap.js";
 export * from "./lp.js";

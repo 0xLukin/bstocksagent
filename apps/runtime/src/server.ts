@@ -58,6 +58,20 @@ export function createApp(
     }
   });
 
+  app.post("/intents/:id/cancel", async (c) => {
+    try {
+      const intent = intents.cancel(c.req.param("id"));
+      if (intent.conversationId && extras?.conversations) {
+        extras.conversations.cancelPending(intent.conversationId);
+      }
+      return c.json({ ok: true, intent });
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err);
+      const status = text.includes("已经广播") ? 409 : text.includes("not found") ? 404 : 400;
+      return c.json({ error: text }, status);
+    }
+  });
+
   app.post("/intents/:id/bind-check", async (c) => {
     const body = (await c.req.json()) as { address?: string };
     const intent = intents.get(c.req.param("id"));

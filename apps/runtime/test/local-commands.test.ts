@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatRuntimeState } from "../src/conversation.js";
-import { formatToolReply, parseBuySell, parseLocalCommand } from "../src/localCommands.js";
+import { formatToolReply, parseAddLp, parseBuySell, parseLocalCommand } from "../src/localCommands.js";
 
 describe("parseLocalCommand", () => {
   it("parses a swap quote", () => {
@@ -14,6 +14,39 @@ describe("parseLocalCommand", () => {
 
   it("parses confirm", () => {
     expect(parseLocalCommand("确认执行")).toEqual({ kind: "confirm" });
+    expect(parseLocalCommand("确定")).toEqual({ kind: "confirm" });
+    expect(parseLocalCommand("我确认")).toEqual({ kind: "confirm" });
+  });
+
+  it("parses spoken 100u NVIDIA LP as a pending mint", () => {
+    expect(parseAddLp("帮我加100u的英伟达lp")).toEqual({
+      token: "英伟达",
+      budgetQuoteUi: "100",
+    });
+    expect(parseLocalCommand("帮我加100u的英伟达lp")).toEqual({
+      kind: "lp",
+      token: "英伟达",
+      budgetQuoteUi: "100",
+    });
+    expect(parseLocalCommand("用 100 USDT 加 NVDAB 池")).toEqual({
+      kind: "lp",
+      token: "NVDAB",
+      budgetQuoteUi: "100",
+    });
+  });
+
+  it("parses position management", () => {
+    expect(parseLocalCommand("我的仓位")).toEqual({ kind: "positions" });
+    expect(parseLocalCommand("收手续费")).toEqual({ kind: "collect" });
+    expect(parseLocalCommand("收手续费 12345")).toEqual({ kind: "collect", tokenId: "12345" });
+    expect(parseLocalCommand("全撤")).toEqual({ kind: "decrease", fractionBps: 10_000 });
+    expect(parseLocalCommand("撤一半")).toEqual({ kind: "decrease", fractionBps: 5_000 });
+  });
+
+  it("parses cancel", () => {
+    expect(parseLocalCommand("取消")).toEqual({ kind: "cancel" });
+    expect(parseLocalCommand("不要了")).toEqual({ kind: "cancel" });
+    expect(parseLocalCommand("取消这笔兑换")).toEqual({ kind: "cancel" });
   });
 
   it("parses LP analyze and mint", () => {
@@ -72,6 +105,32 @@ describe("parseLocalCommand", () => {
     });
     expect(text).toContain("100 USDT → NVDAB");
     expect(text).toMatch(/禁止再问/);
+  });
+
+  it("tells the model a budget LP is pending", () => {
+    const text = formatRuntimeState({
+      id: "local",
+      geoConfirmed: true,
+      userConfirmed: true,
+      wallet: "0x3e01a5779cfa830794dbb9c8673a61b3c5c5608a",
+      lastLp: { token: "NVDAB", budgetQuoteUi: "100", rangeBps: 3000 },
+      updatedAt: new Date().toISOString(),
+    });
+    expect(text).toContain("预算约 100 USDT");
+    expect(text).toMatch(/create_lp_intent/);
+  });
+
+  it("formats a 1-share mid price", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        display: "NVDAB ≈ 214.4 USDT / 股",
+        uiPrice: "214.4",
+        token: "NVDAB",
+        quote: "USDT",
+      }),
+    );
+    expect(text).toContain("NVDAB ≈ 214.4 USDT / 股");
+    expect(text).toMatch(/1 股|中间价/);
   });
 
   it("formats a signer URL instead of dumping JSON", () => {

@@ -65,6 +65,25 @@ describe("Termix conversation memory", () => {
     expect(card).toMatch(/不要当成第一次来|记忆卡/);
   });
 
+  it("clears the pending quote when the user cancels", () => {
+    const store = new ConversationStore(mkdtempSync(join(tmpdir(), "conv-")));
+    store.ingestUserText("local", "我确认不在美国及受限地区");
+    store.ingestUserText("local", WALLET);
+    const s = store.get("local");
+    s.lastQuote = { tokenIn: "USDT", tokenOut: "NVDAB", amountInUi: "100" };
+    store.save(s);
+    store.rememberIntent("local", {
+      id: "intent-1",
+      kind: "swap",
+      signerUrl: "https://signer.example/t/intent-1",
+    });
+    const next = store.cancelPending("local");
+    expect(next.lastQuote).toBeUndefined();
+    expect(next.userConfirmed).toBe(false);
+    expect(next.lastIntent?.cancelled).toBe(true);
+    expect(formatRuntimeState(next)).toMatch(/已取消/);
+  });
+
   it("appends transcript turns for the next LLM call", () => {
     const store = new ConversationStore(mkdtempSync(join(tmpdir(), "conv-")));
     store.appendTurn("local", "user", "买100u英伟达");

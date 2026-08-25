@@ -1,15 +1,24 @@
 import { getAddress, type Address, type Hex, type PublicClient } from "viem";
 import {
   analyzeLp,
+  assertPositionOwner,
   buildCollectTx,
+  buildDecreaseLpTxs,
+  buildIncreaseLpTxs,
   buildMintLpTxs,
   buildSwapTxs,
+  DEFAULT_LP_RANGE_BPS,
+  executionQuotePerUnit,
   getPublicClient,
   getToken,
   isWhitelisted,
+  listPositions,
+  parseUiNumber,
+  priceDeviationBps,
   quoteSwap,
   readBalanceUi,
   readPosition,
+  swapNotionalUsd,
 } from "@bstocks/chain";
 import { evaluateRisk, loadRiskConfig } from "@bstocks/risk";
 import { sendConversationOffer, TermixClient } from "@bstocks/termix";
@@ -36,7 +45,7 @@ export const TOOL_DEFS = [
     function: {
       name: "get_bstock_price",
       description:
-        "Read a whitelist bStock mid price via V3 quote of 1 quote unit. token accepts on-chain symbols or aliases (NVDAB, NVDA, bNVDA, 英伟达).",
+        "Mid price: how many quote units for 1 share of a whitelist bStock (e.g. 1 NVDAB ≈ X USDT). Not a 1 USDT buy quote. token accepts aliases (NVDAB, NVDA, 英伟达).",
       parameters: {
         type: "object",
         properties: {
@@ -51,13 +60,14 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "quote_swap",
-      description: "Quote a whitelist V3 swap. Amount is UI display units.",
+      description: "Quote a whitelist V3 swap for the user's amount. Amount is UI display units.",
       parameters: {
         type: "object",
         properties: {
           tokenIn: { type: "string" },
           tokenOut: { type: "string" },
           amountInUi: { type: "string" },
+          fee: { type: "number" },
         },
         required: ["tokenIn", "tokenOut", "amountInUi"],
       },
@@ -67,10 +77,35 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "analyze_lp",
-      description: "Read Pancake V3 pool state and IL warnings.",
+      description: "Read Pancake V3 pool state, real TVL, mid price, and a suggested ±30% range.",
       parameters: {
         type: "object",
-        properties: { token: { type: "string" }, quote: { type: "string" } },
+        properties: {
+          token: { type: "string" },
+          quote: { type: "string" },
+          fee: { type: "number" },
+          rangeBps: { type: "number" },
+        },
+        required: ["token"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "list_positions",
+      description: "List the bound wallet's Pancake V3 positions on whitelist bStock pools.",
+      parameters: { type: "object", properties: {} },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "read_balance",
+      description: "Read a whitelist token balance for the bound wallet (or a given 0x).",
+      parameters: {
+        type: "object",
+        properties: { token: { type: "string" }, account: { type: "string" } },
         required: ["token"],
       },
     },
@@ -88,6 +123,7 @@ export const TOOL_DEFS = [
           tokenOut: { type: "string" },
           amountInUi: { type: "string" },
           slippageBps: { type: "number" },
+          fee: { type: "number" },
         },
         required: ["tokenIn", "tokenOut", "amountInUi"],
       },
@@ -97,14 +133,21 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "create_lp_intent",
-      description: "Create a user-signed LP mint or collect intent. Requires geo + confirm.",
+      description:
+        "Create a user-signed LP intent: mint (default range ±30%), collect, increase, or decrease. Requires geo + confirm.",
       parameters: {
         type: "object",
         properties: {
           token: { type: "string" },
           amountTokenUi: { type: "string" },
           amountQuoteUi: { type: "string" },
+          budgetQuoteUi: { type: "string", description: "Total USDT budget to deploy (split by V3 math, not 50/50)." },
+          rangeBps: { type: "number", description: "Default 3000 = ±30%. 1500 = ±15%. 1000 = ±10%." },
+          fee: { type: "number" },
           collectTokenId: { type: "string" },
+          increaseTokenId: { type: "string" },
+          decreaseTokenId: { type: "string" },
+          decreaseBps: { type: "number", description: "10000 = full exit, 5000 = half." },
         },
         required: ["token"],
       },
@@ -126,7 +169,7 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "generate_report",
-      description: "Build a delivery markdown/json report.",
+      description: "Build a delivery markdown/json report with live positions when possible.",
       parameters: {
         type: "object",
         properties: {
@@ -187,6 +230,7 @@ function riskFor(args: {
   slippageBps: number;
   notionalUsd: number;
   poolLiquidityUsd: number;
+  priceDeviationBps: number;
   amountMin: bigint;
   state: ConversationState;
 }) {
@@ -197,11 +241,28 @@ function riskFor(args: {
     slippageBps: args.slippageBps,
     notionalUsd: args.notionalUsd,
     poolLiquidityUsd: args.poolLiquidityUsd,
-    priceDeviationBps: 0,
+    priceDeviationBps: args.priceDeviationBps,
     amountMin: args.amountMin,
     geoConfirmed: args.state.geoConfirmed,
     userConfirmed: args.state.userConfirmed,
   });
+}
+
+function consumePending(ctx: ToolCtx) {
+  ctx.conversations.consumeConfirm(ctx.conversation.id);
+  ctx.conversations.clearPending(ctx.conversation.id);
+  delete ctx.conversation.lastQuote;
+  delete ctx.conversation.lastLp;
+  ctx.conversation.userConfirmed = false;
+}
+
+function signerOf(ctx: ToolCtx, intent: { id: string }) {
+  return `${ctx.signerWebUrl}/t/${intent.id}`;
+}
+
+async function midQuotePerShare(token: string, quote: string, client: PublicClient): Promise<number> {
+  const q = await quoteSwap({ tokenIn: token, tokenOut: quote, amountInUi: "1", client });
+  return parseUiNumber(q.amountOutUi);
 }
 
 export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Promise<string> {
@@ -211,12 +272,13 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   if (name === "get_bstock_price") {
     const token = getToken(String(args.token)).symbol;
     const quote = getToken(String(args.quote ?? "USDT")).symbol;
-    const q = await quoteSwap({ tokenIn: quote, tokenOut: token, amountInUi: "1", client });
+    const q = await quoteSwap({ tokenIn: token, tokenOut: quote, amountInUi: "1", client });
     return JSON.stringify({
       token,
       requested: String(args.token),
       quote,
-      uiPriceApprox: q.amountOutUi,
+      uiPrice: q.amountOutUi,
+      display: `${token} ≈ ${q.amountOutUi} ${quote} / 股`,
       rawOut: q.amountOutRaw.toString(),
       fee: q.fee,
       pool: q.pool,
@@ -229,6 +291,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       tokenIn: String(args.tokenIn),
       tokenOut: String(args.tokenOut),
       amountInUi: String(args.amountInUi),
+      fee: args.fee != null ? Number(args.fee) : undefined,
       client,
     });
     ctx.conversation.lastQuote = {
@@ -243,40 +306,118 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       amountInRaw: q.amountInRaw.toString(),
       amountOutRaw: q.amountOutRaw.toString(),
       sqrtPriceX96After: q.sqrtPriceX96After?.toString(),
-      reminder: "以上 amount*Ui 仅供展示；链上使用 raw。",
+      reminder: "以上 amount*Ui 仅供展示；链上使用 raw。查价请看 1 股值多少报价资产，不要用 1 USDT 买多少股当股价。",
     });
   }
 
   if (name === "analyze_lp") {
-    return JSON.stringify(await analyzeLp({ token: String(args.token), quote: args.quote, client }));
+    const rangeBps = args.rangeBps != null ? Number(args.rangeBps) : DEFAULT_LP_RANGE_BPS;
+    const analysis = await analyzeLp({
+      token: String(args.token),
+      quote: args.quote,
+      fee: args.fee != null ? Number(args.fee) : undefined,
+      rangeBps,
+      client,
+    });
+    const token = getToken(String(args.token)).symbol;
+    ctx.conversation.lastLp = {
+      ...ctx.conversation.lastLp,
+      token,
+      fee: analysis.fee,
+      rangeBps: analysis.suggestedRangeBps,
+    };
+    delete ctx.conversation.lastQuote;
+    ctx.conversations.save(ctx.conversation);
+    return JSON.stringify(analysis);
+  }
+
+  if (name === "list_positions") {
+    if (!ctx.conversation.wallet) throw new Error("尚未记录用户钱包地址。");
+    const positions = await listPositions(ctx.conversation.wallet, client);
+    return JSON.stringify({ wallet: ctx.conversation.wallet, count: positions.length, positions });
+  }
+
+  if (name === "read_balance") {
+    const token = getToken(String(args.token));
+    const account = getAddress(String(args.account ?? ctx.conversation.wallet ?? "")) as Address;
+    return JSON.stringify(await readBalanceUi(client, token, account));
   }
 
   if (name === "create_swap_intent") {
     gate(ctx.conversation);
     const cfg = loadRiskConfig();
     const slippageBps = Number(args.slippageBps ?? cfg.defaultSlippageBps);
-    const built = await buildSwapTxs({
-      tokenIn: String(args.tokenIn),
-      tokenOut: String(args.tokenOut),
+    const tokenIn = getToken(String(args.tokenIn));
+    const tokenOut = getToken(String(args.tokenOut));
+    const bal = await readBalanceUi(client, tokenIn, ctx.conversation.wallet!);
+    const need = (await quoteSwap({
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
       amountInUi: String(args.amountInUi),
+      fee: args.fee != null ? Number(args.fee) : undefined,
+      client,
+    })).amountInRaw;
+    if (bal.raw < need) {
+      return JSON.stringify({
+        error: "insufficient_balance",
+        message: `余额不足：钱包有 ${bal.uiDisplay} ${tokenIn.symbol}，这笔要 ${args.amountInUi}。`,
+      });
+    }
+    const built = await buildSwapTxs({
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
+      amountInUi: String(args.amountInUi),
+      fee: args.fee != null ? Number(args.fee) : undefined,
       recipient: ctx.conversation.wallet!,
       slippageBps,
       deadlineSeconds: cfg.deadlineSeconds,
       client,
     });
-    const notional = Number(args.amountInUi);
+    const bstock = tokenIn.kind === "bstock" ? tokenIn : tokenOut.kind === "bstock" ? tokenOut : tokenOut;
+    const stable = tokenIn.kind === "stable" ? tokenIn : tokenOut.kind === "stable" ? tokenOut : getToken("USDT");
+    let mid = 0;
+    try {
+      mid = await midQuotePerShare(bstock.symbol, stable.symbol, client);
+    } catch {
+      mid = 0;
+    }
+    const exec = executionQuotePerUnit({
+      tokenIn,
+      tokenOut,
+      amountInUi: built.quote.amountInUi,
+      amountOutUi: built.quote.amountOutUi,
+    });
+    let poolTvl = 0;
+    if (built.quote.pool) {
+      try {
+        const pairToken = tokenIn.kind === "bstock" ? tokenIn.symbol : tokenOut.symbol;
+        const analysis = await analyzeLp({ token: pairToken, quote: stable.symbol, fee: built.quote.fee, client });
+        poolTvl = parseUiNumber(analysis.tvlUsdApprox);
+      } catch {
+        poolTvl = 0;
+      }
+    }
+    const notional = swapNotionalUsd({
+      tokenIn,
+      tokenOut,
+      amountInUi: built.quote.amountInUi,
+      amountOutUi: built.quote.amountOutUi,
+      midQuotePerUnit: mid,
+    });
     const verdict = riskFor({
-      tokenIn: String(args.tokenIn),
-      tokenOut: String(args.tokenOut),
+      tokenIn: tokenIn.symbol,
+      tokenOut: tokenOut.symbol,
       slippageBps,
-      notionalUsd: Number.isFinite(notional) ? notional : 0,
-      poolLiquidityUsd: 50_000,
+      notionalUsd: notional,
+      poolLiquidityUsd: poolTvl,
+      priceDeviationBps: priceDeviationBps(exec, mid),
       amountMin: built.amountOutMin,
       state: ctx.conversation,
     });
     if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
     const intent = ctx.intents.create({
       kind: "swap",
+      conversationId: ctx.conversation.id,
       userAddress: ctx.conversation.wallet!,
       txs: built.txs,
       summary: {
@@ -289,14 +430,13 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         amountOutMin: built.amountOutMin.toString(),
         slippageBps,
         route: built.quote.route,
+        notionalUsd: notional.toFixed(2),
+        midQuotePerToken: mid || undefined,
       },
-      risks: [...verdict.warnings, ...built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : []],
+      risks: [...verdict.warnings, ...(built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : [])],
     });
-    ctx.conversations.consumeConfirm(ctx.conversation.id);
-    ctx.conversations.clearPending(ctx.conversation.id);
-    delete ctx.conversation.lastQuote;
-    ctx.conversation.userConfirmed = false;
-    const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
+    consumePending(ctx);
+    const signerUrl = signerOf(ctx, intent);
     rememberCreatedIntent(ctx, { id: intent.id, kind: "swap", signerUrl, summary: intent.summary });
     return JSON.stringify({
       intentId: intent.id,
@@ -309,65 +449,161 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   if (name === "create_lp_intent") {
     gate(ctx.conversation);
     const cfg = loadRiskConfig();
+    const token = String(args.token ?? "NVDAB");
     if (args.collectTokenId) {
       const tokenId = BigInt(String(args.collectTokenId));
       const pos = await readPosition(tokenId, client);
+      assertPositionOwner(pos.owner, ctx.conversation.wallet!);
       const tx = await buildCollectTx({ userAddress: ctx.conversation.wallet!, tokenId });
+      const tvl = parseUiNumber(pos.snapshot.markUsd) || parseUiNumber(pos.snapshot.feesUsdApprox);
+      const verdict = riskFor({
+        tokenIn: pos.token0.symbol,
+        tokenOut: pos.token1.symbol,
+        slippageBps: cfg.defaultSlippageBps,
+        notionalUsd: parseUiNumber(pos.snapshot.feesUsdApprox),
+        poolLiquidityUsd: tvl > 0 ? Math.max(tvl, cfg.minPoolLiquidityUsd) : 0,
+        priceDeviationBps: 0,
+        amountMin: 1n,
+        state: ctx.conversation,
+      });
+      if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
       const intent = ctx.intents.create({
         kind: "lp-collect",
+        conversationId: ctx.conversation.id,
         userAddress: ctx.conversation.wallet!,
         txs: [tx],
-        summary: { tokenId: String(tokenId), position: pos },
-        risks: ["收取手续费不会移除本金，但需用户自行签名。"],
+        summary: {
+          tokenId: String(tokenId),
+          token0: pos.token0.symbol,
+          token1: pos.token1.symbol,
+          amount0Ui: pos.snapshot.tokensOwed0Ui,
+          amount1Ui: pos.snapshot.tokensOwed1Ui,
+          analysis: { token0: pos.token0.symbol, token1: pos.token1.symbol },
+        },
+        risks: [...verdict.warnings, "收取手续费不会移除本金，但需用户自行签名。"],
       });
-      ctx.conversations.consumeConfirm(ctx.conversation.id);
-      ctx.conversations.clearPending(ctx.conversation.id);
-      ctx.conversation.userConfirmed = false;
-      const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
-      rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-collect", signerUrl, summary: { tokenId: String(tokenId) } });
-      return JSON.stringify({ intentId: intent.id, signerUrl });
+      consumePending(ctx);
+      const signerUrl = signerOf(ctx, intent);
+      rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-collect", signerUrl, summary: intent.summary });
+      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
     }
-    if (!args.amountTokenUi) throw new Error("amountTokenUi required for mint");
+    if (args.decreaseTokenId) {
+      const built = await buildDecreaseLpTxs({
+        userAddress: ctx.conversation.wallet!,
+        tokenId: BigInt(String(args.decreaseTokenId)),
+        decreaseBps: Number(args.decreaseBps ?? 10_000),
+        slippageBps: cfg.defaultSlippageBps,
+        deadlineSeconds: cfg.deadlineSeconds,
+        client,
+      });
+      const notional = parseUiNumber(String(built.summary.amount0Ui ?? "0")) + parseUiNumber(String(built.summary.amount1Ui ?? "0"));
+      const verdict = riskFor({
+        tokenIn: String(built.summary.token0 ?? token),
+        tokenOut: String(built.summary.token1 ?? "USDT"),
+        slippageBps: cfg.defaultSlippageBps,
+        notionalUsd: parseUiNumber(built.analysis.tvlUsdApprox) ? notional : notional,
+        poolLiquidityUsd: parseUiNumber(built.analysis.tvlUsdApprox),
+        priceDeviationBps: 0,
+        amountMin: built.amount0Min,
+        state: ctx.conversation,
+      });
+      if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
+      const intent = ctx.intents.create({
+        kind: "lp-decrease",
+        conversationId: ctx.conversation.id,
+        userAddress: ctx.conversation.wallet!,
+        txs: built.txs,
+        summary: built.summary,
+        risks: [...verdict.warnings, ...built.analysis.warnings],
+      });
+      consumePending(ctx);
+      const signerUrl = signerOf(ctx, intent);
+      rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-decrease", signerUrl, summary: intent.summary });
+      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+    }
+    if (args.increaseTokenId) {
+      if (!args.amountTokenUi) throw new Error("加仓需要 amountTokenUi");
+      const built = await buildIncreaseLpTxs({
+        userAddress: ctx.conversation.wallet!,
+        tokenId: BigInt(String(args.increaseTokenId)),
+        amountTokenUi: String(args.amountTokenUi),
+        amountQuoteUi: args.amountQuoteUi ? String(args.amountQuoteUi) : undefined,
+        slippageBps: cfg.defaultSlippageBps,
+        deadlineSeconds: cfg.deadlineSeconds,
+        client,
+      });
+      const notional = parseUiNumber(String(built.summary.amount1Ui ?? built.summary.amount0Ui ?? "0"));
+      const verdict = riskFor({
+        tokenIn: token,
+        tokenOut: "USDT",
+        slippageBps: cfg.defaultSlippageBps,
+        notionalUsd: notional,
+        poolLiquidityUsd: parseUiNumber(built.analysis.tvlUsdApprox),
+        priceDeviationBps: 0,
+        amountMin: built.amount0Min,
+        state: ctx.conversation,
+      });
+      if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
+      const intent = ctx.intents.create({
+        kind: "lp-increase",
+        conversationId: ctx.conversation.id,
+        userAddress: ctx.conversation.wallet!,
+        txs: built.txs,
+        summary: built.summary,
+        risks: [...verdict.warnings, ...built.analysis.warnings],
+      });
+      consumePending(ctx);
+      const signerUrl = signerOf(ctx, intent);
+      rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-increase", signerUrl, summary: intent.summary });
+      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+    }
+    if (!args.amountTokenUi && !args.amountQuoteUi && !args.budgetQuoteUi) {
+      throw new Error("加池需要 amountTokenUi、amountQuoteUi 或 budgetQuoteUi");
+    }
     const built = await buildMintLpTxs({
       userAddress: ctx.conversation.wallet!,
-      token: String(args.token),
-      amountTokenUi: String(args.amountTokenUi),
+      token,
+      amountTokenUi: args.amountTokenUi ? String(args.amountTokenUi) : undefined,
       amountQuoteUi: args.amountQuoteUi ? String(args.amountQuoteUi) : undefined,
+      budgetQuoteUi: args.budgetQuoteUi ? String(args.budgetQuoteUi) : undefined,
+      rangeBps: args.rangeBps != null ? Number(args.rangeBps) : DEFAULT_LP_RANGE_BPS,
+      fee: args.fee != null ? Number(args.fee) : undefined,
       slippageBps: cfg.defaultSlippageBps,
       deadlineSeconds: cfg.deadlineSeconds,
       client,
     });
+    const notional = parseUiNumber(built.analysis.tvlUsdApprox)
+      ? parseUiNumber(String(built.summary.amount1Ui ?? "0")) +
+        parseUiNumber(String(built.summary.amount0Ui ?? "0")) *
+          (parseUiNumber(String(built.summary.midQuotePerToken ?? "0")) || 0)
+      : parseUiNumber(String(args.amountQuoteUi ?? "0"));
+    const mark =
+      parseUiNumber(String(built.summary.amount1Ui ?? "0")) +
+      parseUiNumber(String(built.summary.amount0Ui ?? "0")) *
+        (parseUiNumber(String(built.summary.midQuotePerToken ?? "0")) || 1);
     const verdict = riskFor({
-      tokenIn: String(args.token),
+      tokenIn: token,
       tokenOut: "USDT",
       slippageBps: cfg.defaultSlippageBps,
-      notionalUsd: Number(args.amountQuoteUi ?? 0),
-      poolLiquidityUsd: Number(built.analysis.tvlUsdApprox) || 50_000,
-      amountMin: built.amount0Min,
+      notionalUsd: mark || notional,
+      poolLiquidityUsd: parseUiNumber(built.analysis.tvlUsdApprox),
+      priceDeviationBps: 0,
+      amountMin: built.amount0Min > 0n ? built.amount0Min : built.amount1Min,
       state: ctx.conversation,
     });
     if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
     const intent = ctx.intents.create({
       kind: "lp-mint",
+      conversationId: ctx.conversation.id,
       userAddress: ctx.conversation.wallet!,
       txs: built.txs,
-      summary: {
-        analysis: built.analysis,
-        ticks: built.ticks,
-        amount0Desired: built.amount0Desired.toString(),
-        amount1Desired: built.amount1Desired.toString(),
-        amount0Min: built.amount0Min.toString(),
-        amount1Min: built.amount1Min.toString(),
-      },
+      summary: built.summary,
       risks: [...verdict.warnings, ...built.analysis.warnings],
     });
-    ctx.conversations.consumeConfirm(ctx.conversation.id);
-    ctx.conversations.clearPending(ctx.conversation.id);
-    delete ctx.conversation.lastLp;
-    ctx.conversation.userConfirmed = false;
-    const signerUrl = `${ctx.signerWebUrl}/t/${intent.id}`;
+    consumePending(ctx);
+    const signerUrl = signerOf(ctx, intent);
     rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-mint", signerUrl, summary: intent.summary });
-    return JSON.stringify({ intentId: intent.id, signerUrl });
+    return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
   }
 
   if (name === "verify_tx") {
@@ -382,12 +618,27 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "generate_report") {
+    let positions: unknown[] = [];
+    if (ctx.conversation.wallet) {
+      try {
+        positions = await listPositions(ctx.conversation.wallet, client);
+      } catch {
+        positions = [];
+      }
+    }
+    const intents = ctx.intents
+      .list()
+      .filter((i) => !ctx.conversation.wallet || i.userAddress.toLowerCase() === ctx.conversation.wallet.toLowerCase())
+      .slice(-20)
+      .map((i) => ({ id: i.id, kind: i.kind, cancelledAt: i.cancelledAt, txHashes: i.txHashes }));
     const report = buildDeliveryReport({
       title: String(args.title ?? "bStocks / Pancake V3 交付报告"),
       userAddress: ctx.conversation.wallet,
       orderId: ctx.conversation.lastOrderId,
       txs: (args.txs ?? []) as Array<{ kind: string; hash: string; note?: string }>,
       notes: (args.notes ?? ["由 Agent 根据本轮对话生成。"]) as string[],
+      positions,
+      intents,
     });
     const md = renderMarkdown(report);
     const file = join(ctx.dataDir, "reports", `${Date.now()}.md`);
@@ -412,12 +663,6 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     });
     ctx.conversations.consumeConfirm(ctx.conversation.id);
     return JSON.stringify({ ok: true, offer: res });
-  }
-
-  if (name === "read_balance") {
-    const token = getToken(String(args.token));
-    const account = getAddress(String(args.account)) as Address;
-    return JSON.stringify(await readBalanceUi(client, token, account));
   }
 
   throw new Error(`Unknown tool ${name}`);

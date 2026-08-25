@@ -73,6 +73,16 @@ describe("confirmation latches", () => {
 
   it("latches explicit user confirm", () => {
     expect(latchUserConfirm(false, "确认执行")).toBe(true);
+    expect(latchUserConfirm(false, "确定")).toBe(true);
+    expect(latchUserConfirm(false, "我确认")).toBe(true);
+    expect(latchUserConfirm(false, "我确认不在美国及受限地区")).toBe(false);
     expect(latchUserConfirm(false, "看看报价")).toBe(false);
+  });
+
+  it("clears confirm on 取消", () => {
+    expect(latchUserConfirm(true, "取消")).toBe(false);
+    expect(latchUserConfirm(true, "不要了")).toBe(false);
+    expect(latchUserConfirm(true, "取消这笔兑换")).toBe(false);
+    expect(latchUserConfirm(true, "我确认不在美国及受限地区")).toBe(true);
   });
 });
