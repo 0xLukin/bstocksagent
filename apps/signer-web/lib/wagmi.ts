@@ -1,6 +1,6 @@
 import { http, createConfig } from "wagmi";
 import { bsc } from "wagmi/chains";
-import { injected } from "wagmi/connectors";
+import { injected } from "./injected";
 
 const projectId = process.env.NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID;
 
