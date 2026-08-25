@@ -11,7 +11,8 @@
     "termix:listing": "tsx src/scripts/publish-listing.ts",
     "termix:accept": "tsx src/scripts/provider-accept.ts",
     "termix:deliver": "tsx src/scripts/submit-delivery.ts",
-    "termix:claim-watch": "tsx src/scripts/claim-watchdog.ts"
+    "termix:claim-watch": "tsx src/scripts/claim-watchdog.ts",
+    "chat": "tsx src/scripts/local-chat.ts"
   },
   "dependencies": {
     "@bstocks/chain": "workspace:*",

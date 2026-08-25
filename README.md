@@ -1,6 +1,10 @@
 # bstocks-yield
 
-BNB Chain 上的 **非托管** bStocks 交易 + PancakeSwap V3 LP Agent。面向 Termix 雇佣，但 **不会在本仓库里铸造 NFT 或发布线上 Listing**（需要你自己的 `WALLET_KEY` 与资金）。仓库提供可本地运行的 Runtime、签名页、CLI，以及上线脚本（默认 dry-run）。
+BNB Chain 上的 **非托管** bStocks 交易 + PancakeSwap V3 LP Agent。面向 [Termix](https://docs.termix.ai/) 雇佣（BNB Chain 黑客松 **TermiX 赛道**）。
+
+**只走 Termix：** 身份用 Termix 铸造的那一枚官方 ERC-8004 NFT，收款用 Termix 托管。不接 BNB Agent Studio、不接 x402。
+
+本仓库 **不会自动铸造 NFT 或发布 Listing**（需要你的 `WALLET_KEY` 与资金）。本地可跑 Runtime、签名页、CLI；上线脚本默认 dry-run。每次功能改动会推到 GitHub，方便审查和 CI。
 
 ## 两套资金流（不要混）
 
@@ -44,13 +48,19 @@ pnpm dev:runtime
 pnpm dev:signer
 ```
 
-本地对话（不经过 Termix）：
+本地对话（不经过 Termix，无 LLM key 也能报价/出意图）：
 
 ```bash
+# 终端 3 — 交互式 /chat
+pnpm chat
+
+# 或 curl
 curl -s http://127.0.0.1:8787/chat \
   -H 'content-type: application/json' \
   -d '{"conversationId":"local","text":"我确认不在美国及受限地区"}'
 ```
+
+建议顺序：地理声明 → 发送 `0x` 钱包 → `报价 USDT→NVDAB 10` → `确认执行` → 打开返回的签名页链接。
 
 ### CLI（只读报价 / 生成 calldata，默认不广播）
 
@@ -98,7 +108,7 @@ pnpm termix:deliver -- <orderId> ./path/report.md
 pnpm termix:claim-watch          # 超时 claim 看门狗
 ```
 
-Listing 类别：`Automation & Ops`。handle：`bstocks-yield`（铸造时只能设一次）。
+Listing 类别：`Automation & Ops`。handle：`bstocks-yield`（铸造时只能设一次）。Termix 铸造的 NFT 就是 BSC 官方 Identity Registry（`0x8004…a432`）上的身份，8004scan 能扫到；不要再 `bag erc8004 register`。
 
 ### 没有自动结算
 

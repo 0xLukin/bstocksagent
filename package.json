@@ -20,7 +20,8 @@
     "termix:listing": "pnpm --filter @bstocks/runtime termix:listing",
     "termix:accept": "pnpm --filter @bstocks/runtime termix:accept",
     "termix:deliver": "pnpm --filter @bstocks/runtime termix:deliver",
-    "termix:claim-watch": "pnpm --filter @bstocks/runtime termix:claim-watch"
+    "termix:claim-watch": "pnpm --filter @bstocks/runtime termix:claim-watch",
+    "chat": "pnpm --filter @bstocks/runtime chat"
   },
   "devDependencies": {
     "@eslint/js": "^9.34.0",

@@ -11,6 +11,8 @@ export type ConversationState = {
   pendingAction?: string;
   lastOrderId?: string;
   lastOfferHint?: string;
+  lastQuote?: { tokenIn: string; tokenOut: string; amountInUi: string };
+  lastLp?: { token: string; amountTokenUi?: string; amountQuoteUi?: string };
   preference?: string;
   updatedAt: string;
 };
