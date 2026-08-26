@@ -2,10 +2,18 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { getAddress } from "viem";
-import { useAccount, useConnect, useDisconnect, useSendTransaction, useSwitchChain } from "wagmi";
+import {
+  useAccount,
+  useConnect,
+  useDisconnect,
+  usePublicClient,
+  useSendTransaction,
+  useSwitchChain,
+} from "wagmi";
 import { bsc } from "wagmi/chains";
 import { buildIntentView, remainingLabel, shortAddr, txTitle } from "../../../lib/intentView";
 import { cancelIntent, fetchIntent, reportTx, type RemoteIntent } from "../../../lib/runtime";
+import { simulateIntentTxs, type LiveSim } from "../../../lib/simulate";
 
 function hashesReady(intent: RemoteIntent, log: string[]) {
   const n = new Set([...log, ...intent.txHashes]).size;
@@ -17,11 +25,13 @@ export function SignerClient({ intentId }: { intentId: string }) {
   const [error, setError] = useState<string>("");
   const [log, setLog] = useState<string[]>([]);
   const [cancelling, setCancelling] = useState(false);
+  const [sim, setSim] = useState<LiveSim>({ status: "running", notes: [] });
   const { address, isConnected, chainId } = useAccount();
   const { connect, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const { sendTransactionAsync, isPending: sending } = useSendTransaction();
+  const publicClient = usePublicClient({ chainId: 56 });
 
   useEffect(() => {
     fetchIntent(intentId)
@@ -43,6 +53,33 @@ export function SignerClient({ intentId }: { intentId: string }) {
   useEffect(() => {
     if (view) document.title = view.title;
   }, [view]);
+
+  useEffect(() => {
+    if (!intent || intent.cancelledAt) return;
+    if (!publicClient) {
+      setSim({ status: "warn", notes: [], error: "尚未连上 BSC RPC，无法模拟。请自行核对钱包弹窗。" });
+      return;
+    }
+    const from = address && boundOk ? address : intent.userAddress;
+    let cancelled = false;
+    setSim({ status: "running", notes: [] });
+    simulateIntentTxs(publicClient, from, intent.txs)
+      .then((next) => {
+        if (!cancelled) setSim(next);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) {
+          setSim({
+            status: "warn",
+            notes: [],
+            error: `无法模拟：${e.message}`,
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [intent, publicClient, address, boundOk]);
 
   async function onSign() {
     if (!intent || !address) return;
@@ -98,7 +135,16 @@ export function SignerClient({ intentId }: { intentId: string }) {
   const fullyBroadcast = intent.txs.length > 0 && hashesReady(intent, log);
   const wrongWallet = isConnected && !boundOk;
   const wrongChain = Boolean(chainId && chainId !== 56);
-  const canSign = boundOk && !ttl.expired && !sending && !wrongChain && !cancelled && !fullyBroadcast;
+  const simBlocked = sim.status === "fail";
+  const canSign =
+    boundOk &&
+    !ttl.expired &&
+    !sending &&
+    !wrongChain &&
+    !cancelled &&
+    !fullyBroadcast &&
+    !simBlocked &&
+    sim.status !== "running";
   const hashes = [...new Set([...log, ...intent.txHashes])];
   const canCancel = !cancelled && !fullyBroadcast && !sending;
 
@@ -145,6 +191,17 @@ export function SignerClient({ intentId }: { intentId: string }) {
 
       <p className="footnote">{view.footnote} 不构成投资建议。</p>
 
+      {sim.status === "running" && <p className="guard">正在模拟交易并估算 gas…</p>}
+      {sim.status === "ok" && sim.gasBnb && (
+        <p className="guard">
+          模拟通过 · 预估矿工费约 <strong>{Number(sim.gasBnb).toPrecision(4)} BNB</strong>
+        </p>
+      )}
+      {sim.status === "warn" && (
+        <p className="banner warn">{sim.error ?? "模拟不完整，请自行核对钱包弹窗。"}</p>
+      )}
+      {sim.status === "fail" && <p className="banner danger">{sim.error ?? "模拟失败，已禁止确认。"}</p>}
+
       <div className="wallet-row">
         <div>
           <div className="leg-kicker">钱包</div>
@@ -185,7 +242,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
             </button>
           ) : (
             <button className="primary" disabled={!canSign} onClick={() => void onSign()}>
-              {sending ? "等待钱包确认…" : view.cta}
+              {sending ? "等待钱包确认…" : sim.status === "running" ? "正在模拟…" : view.cta}
             </button>
           )}
           <button className="ghost cancel" disabled={!canCancel || cancelling} onClick={() => void onCancel()}>
@@ -251,7 +308,22 @@ export function SignerClient({ intentId }: { intentId: string }) {
             </li>
           ))}
         </ol>
-        <p className="hint">{intent.simulation.ok ? "编码检查通过。" : "编码检查未通过。"}</p>
+        <p className="hint">
+          {sim.status === "ok"
+            ? "链上模拟通过。"
+            : sim.status === "fail"
+              ? "链上模拟未通过。"
+              : intent.simulation.ok
+                ? "Runtime 已做编码检查；本页会再模拟。"
+                : "编码检查未通过。"}
+        </p>
+        {sim.notes.length > 0 && (
+          <ul className="risks">
+            {sim.notes.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        )}
       </details>
 
       {intent.risks.length > 0 && (

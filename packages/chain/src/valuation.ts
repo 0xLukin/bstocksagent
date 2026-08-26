@@ -42,12 +42,19 @@ export function markPairUsd(args: {
   amount0Ui: string;
   amount1Ui: string;
   sqrtPriceX96: bigint;
+  /** USD per 1 WBNB. Required to mark gas/bStock pools; without it WBNB is treated as $1. */
+  usdPerGas?: number;
 }): number {
   const a0 = parseUiNumber(args.amount0Ui);
   const a1 = parseUiNumber(args.amount1Ui);
   const p = token1PerToken0(args.sqrtPriceX96, args.token0.decimals, args.token1.decimals);
   if (args.token1.kind === "stable") return a0 * p + a1;
   if (args.token0.kind === "stable") return a0 + (p > 0 ? a1 / p : 0);
+  const g = args.usdPerGas;
+  if (g && g > 0) {
+    if (args.token1.kind === "gas") return (a0 * p + a1) * g;
+    if (args.token0.kind === "gas") return a0 * g + (p > 0 ? (a1 / p) * g : 0);
+  }
   return a0 * p + a1;
 }
 

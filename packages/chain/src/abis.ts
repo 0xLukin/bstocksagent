@@ -241,6 +241,56 @@ export const smartRouterAbi = [
     ],
     outputs: [{ type: "bytes[]" }],
   },
+  {
+    type: "function",
+    name: "unwrapWETH9",
+    stateMutability: "payable",
+    inputs: [
+      { name: "amountMinimum", type: "uint256" },
+      { name: "recipient", type: "address" },
+    ],
+    outputs: [],
+  },
+  {
+    type: "function",
+    name: "refundETH",
+    stateMutability: "payable",
+    inputs: [],
+    outputs: [],
+  },
+] as const;
+
+/** WBNB / WETH9 wrap. Used when Smart Router will not consume msg.value. */
+export const wbnbAbi = [
+  {
+    type: "function",
+    name: "deposit",
+    stateMutability: "payable",
+    inputs: [],
+    outputs: [],
+  },
+] as const;
+
+/**
+ * Canonical Permit2. Smart Router 0x13f4… pulls via ERC20 transferFrom, not this.
+ * Kept so we can checksum the configured address and read leftover allowances.
+ */
+export const permit2Abi = [
+  {
+    type: "function",
+    name: "allowance",
+    stateMutability: "view",
+    inputs: [
+      { name: "owner", type: "address" },
+      { name: "token", type: "address" },
+      { name: "spender", type: "address" },
+    ],
+    outputs: [
+      { name: "amount", type: "uint160" },
+      { name: "expiration", type: "uint48" },
+      { name: "nonce", type: "uint48" },
+    ],
+  },
 ] as const;
 
 export const nfpmAbi = [

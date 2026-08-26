@@ -1,4 +1,10 @@
-import { DEFAULT_LP_RANGE_BPS, getToken } from "@bstocks/chain";
+import {
+  DEFAULT_LP_RANGE_BPS,
+  getToken,
+  pickComparedPool,
+  swapAssetSymbol,
+  type CompareLpResult,
+} from "@bstocks/chain";
 import { isUserCancel, isUserConfirm } from "@bstocks/risk";
 import type { PendingLp, PendingQuote } from "./conversation.js";
 import { runTool, type ToolCtx } from "./tools.js";
@@ -6,7 +12,17 @@ import { runTool, type ToolCtx } from "./tools.js";
 export type LocalCmd =
   | { kind: "quote"; tokenIn: string; tokenOut: string; amountInUi: string }
   | { kind: "price"; token: string; quote: string }
-  | { kind: "lp"; token: string; amountTokenUi?: string; amountQuoteUi?: string; budgetQuoteUi?: string }
+  | { kind: "lp-compare"; token: string }
+  | {
+      kind: "lp";
+      token: string;
+      quote?: string;
+      fee?: number;
+      pick?: "highest" | "thickest";
+      amountTokenUi?: string;
+      amountQuoteUi?: string;
+      budgetQuoteUi?: string;
+    }
   | { kind: "positions" }
   | { kind: "collect"; tokenId?: string }
   | { kind: "decrease"; fractionBps: number }
@@ -33,28 +49,42 @@ const POSITIONS = /^(?:我的)?(?:仓位|持仓|positions?)$/i;
 const DECREASE_FULL = /^(全撤|撤出全部|全部撤出|撤出)$/;
 const DECREASE_HALF = /^(撤一半|减仓一半|撤 50%)$/;
 
+function spokenQuoteAsset(raw: string): string {
+  const key = raw.toLowerCase();
+  if (key === "bnb") return "BNB";
+  if (key === "wbnb") return "WBNB";
+  return "USDT";
+}
+
 export function parseBuySell(text: string): PendingQuote | null {
   const t = text.trim();
   const spend = t.match(
     new RegExp(
-      `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
+      `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd|wbnb|bnb)\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
       "i",
     ),
   );
   if (spend) {
-    return { tokenIn: "USDT", tokenOut: spend[3]!, amountInUi: spend[1]! };
+    return { tokenIn: spokenQuoteAsset(spend[2]!), tokenOut: spend[3]!, amountInUi: spend[1]! };
   }
   const buy = t.match(
-    new RegExp(`(?:买|买入|要买|购入)\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:的|得)?\\s*(${TOK})`, "i"),
+    new RegExp(`(?:买|买入|要买|购入)\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd|wbnb|bnb)\\s*(?:的|得)?\\s*(${TOK})`, "i"),
   );
   if (buy) {
-    return { tokenIn: "USDT", tokenOut: buy[3]!, amountInUi: buy[1]! };
+    return { tokenIn: spokenQuoteAsset(buy[2]!), tokenOut: buy[3]!, amountInUi: buy[1]! };
   }
   const sell = t.match(
-    new RegExp(`(?:卖|卖出)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:个|股)?\\s*(?:的)?\\s*(${TOK})(?:\\s*(?:换|成|得)\\s*(u|usdt|usd))?`, "i"),
+    new RegExp(
+      `(?:卖|卖出)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:个|股)?\\s*(?:的)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s*(?:换|成|得)\\s*(u|usdt|usd|wbnb|bnb))?\\s*$`,
+      "i",
+    ),
   );
   if (sell) {
-    return { tokenIn: sell[2]!, tokenOut: "USDT", amountInUi: sell[1]! };
+    return {
+      tokenIn: sell[2]!,
+      tokenOut: sell[3] ? spokenQuoteAsset(sell[3]) : "USDT",
+      amountInUi: sell[1]!,
+    };
   }
   return null;
 }
@@ -71,7 +101,7 @@ export function rememberSwapQuote(ctx: ToolCtx, quote: PendingQuote) {
 
 function canonSymbol(symbol: string): string {
   try {
-    return getToken(symbol).symbol;
+    return swapAssetSymbol(symbol);
   } catch {
     return symbol.trim().toUpperCase();
   }
@@ -81,50 +111,190 @@ export function rememberLp(ctx: ToolCtx, lp: PendingLp) {
   ctx.conversation.lastLp = {
     ...lp,
     token: canonSymbol(lp.token),
+    quote: lp.quote ? canonSymbol(lp.quote === "BNB" ? "WBNB" : lp.quote) : lp.quote,
     rangeBps: lp.rangeBps ?? DEFAULT_LP_RANGE_BPS,
   };
   delete ctx.conversation.lastQuote;
   ctx.conversations.save(ctx.conversation);
 }
 
+export function parseSpokenFee(text: string): number | undefined {
+  const named = text.match(/(?:fee\s*)?(10000|2500|500|100)\b/i);
+  if (named && /fee|档/i.test(text)) return Number(named[1]);
+  const pct = text.match(/(\d+(?:\.\d+)?)\s*%/);
+  if (!pct) return undefined;
+  const bps = Math.round(Number(pct[1]) * 100);
+  if (bps === 1 || bps === 5 || bps === 25 || bps === 100) return bps * 100;
+  return undefined;
+}
+
+export function parseSpokenQuote(text: string): string | undefined {
+  if (/\bwbnb\b/i.test(text)) return "WBNB";
+  if (/\busdc\b/i.test(text)) return "USDC";
+  if (/(?:usdt\s*(?:池|档|那个)|那个\s*usdt)/i.test(text)) return "USDT";
+  if (/\bbnb\b/i.test(text) && /(?:池|档|那个|lp)/i.test(text)) return "WBNB";
+  return undefined;
+}
+
+export function parseCompareLp(text: string): { token: string } | null {
+  const t = text.trim();
+  if (/加/.test(t) && /\d/.test(t)) return null;
+  if (!/(apr|年化|收益|哪个lp|哪[个個]池|池子怎么样|lp怎么样|流动性池|最高.*lp|lp.*最高)/i.test(t)) {
+    return null;
+  }
+  const cleaned = t.replace(/^(?:查看|查一下|看看|查下)\s*/i, "");
+  const parts = cleaned.split(
+    /(?:的)?(?:目前|当前|哪个|哪個|最高|apr|年化|收益|lp|池子?|流动性|怎么样)/i,
+  );
+  const token = (parts[0] || "").trim();
+  if (!token || /最高|哪个|哪個|怎样|如何/.test(token)) return null;
+  return { token };
+}
+
+const FIAT = "u|usdt|usd|刀|美金|美元|块";
+const BEST_POOL = "最高apr|apr最高|年化最高|最高那个|那个最高|最高的|最好的|最好那个|最好的那个";
+
+function parseLpPick(text: string): "highest" | "thickest" | undefined {
+  if (/(最厚|tvl\s*最高|流动性最大)/i.test(text)) return "thickest";
+  if (new RegExp(BEST_POOL, "i").test(text)) return "highest";
+  return undefined;
+}
+
 function stripLpSuffix(token: string): string {
   return token.replace(/(?:的)?(?:lp|加池|池子?|流动性)$/i, "").trim();
 }
 
-export function parseAddLp(text: string): PendingLp | null {
+function cleanLpToken(raw: string): string {
+  const token = stripLpSuffix(raw).replace(/[吧吗呢啊呀]+$/u, "").trim();
+  if (!token || /最高|最好|那个|哪個|怎样|如何|池子/.test(token)) return "";
+  return token;
+}
+
+export type ParsedAddLp = PendingLp & { pick?: "highest" | "thickest" };
+
+export function parseAddLp(text: string): ParsedAddLp | null {
   const t = text.trim();
+  const extras = () => {
+    const quote = parseSpokenQuote(t);
+    const fee = parseSpokenFee(t);
+    const pick = parseLpPick(t);
+    return {
+      ...(quote ? { quote } : {}),
+      ...(fee != null ? { fee } : {}),
+      ...(pick ? { pick } : {}),
+    };
+  };
+  const budgetHighest = t.match(
+    new RegExp(
+      `(?:帮我|请|想要?)?加\\s*(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:的|到)?(?:那个)?(?:${BEST_POOL})`,
+      "i",
+    ),
+  );
+  if (budgetHighest) {
+    const tok = t.match(new RegExp(`(?:的)?\\s*(${TOK})(?:的)?(?:lp|池|流动性)?\\s*$`, "i"));
+    return {
+      token: tok?.[1] ? cleanLpToken(tok[1]) : "",
+      budgetQuoteUi: budgetHighest[1]!,
+      pick: "highest",
+      ...extras(),
+    };
+  }
   const budgetThenToken = t.match(
     new RegExp(
-      `(?:帮我|请|想要?)?加\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:的)?\\s*(${TOK})`,
+      `(?:帮我|请|想要?)?加\\s*(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:的)?\\s*(${TOK})`,
       "i",
     ),
   );
   if (budgetThenToken) {
-    return { token: stripLpSuffix(budgetThenToken[3]!), budgetQuoteUi: budgetThenToken[1]! };
+    return { token: cleanLpToken(budgetThenToken[3]!), budgetQuoteUi: budgetThenToken[1]!, ...extras() };
   }
   const spendThenToken = t.match(
     new RegExp(
-      `(?:用|把)\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)\\s*(?:去|来|拿去)?\\s*加\\s*(?:成)?\\s*(${TOK})`,
+      `(?:用|把)\\s*(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:去|来|拿去)?\\s*加\\s*(?:成)?\\s*(${TOK})`,
       "i",
     ),
   );
   if (spendThenToken) {
-    return { token: stripLpSuffix(spendThenToken[3]!), budgetQuoteUi: spendThenToken[1]! };
+    return { token: cleanLpToken(spendThenToken[3]!), budgetQuoteUi: spendThenToken[1]!, ...extras() };
   }
   const tokenThenBudget = t.match(
     new RegExp(
-      `(?:加lp|加池|加)\\s*(${TOK})\\s*(?:lp|池|流动性)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd)`,
+      `(?:加lp|加池|加)\\s*([A-Za-z\\u4e00-\\u9fff]+)\\s*(?:lp|池|流动性)?\\s*(\\d+(?:\\.\\d+)?)\\s*(${FIAT})`,
       "i",
     ),
   );
   if (tokenThenBudget) {
-    return { token: stripLpSuffix(tokenThenBudget[1]!), budgetQuoteUi: tokenThenBudget[2]! };
+    return { token: cleanLpToken(tokenThenBudget[1]!), budgetQuoteUi: tokenThenBudget[2]!, ...extras() };
   }
   return null;
 }
 
+function recoverBudgetUi(ctx: ToolCtx): string | undefined {
+  const turns = [...(ctx.conversation.turns ?? [])].reverse();
+  for (const turn of turns.slice(0, 8)) {
+    if (turn.role !== "user") continue;
+    const m = turn.content.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${FIAT})\\b`, "i"));
+    if (m && /加|lp|池/i.test(turn.content)) return m[1];
+  }
+  return undefined;
+}
+
+async function hydratePendingLp(ctx: ToolCtx): Promise<PendingLp | undefined> {
+  let lp = ctx.conversation.lastLp;
+  if (hasMintSize(lp)) return lp;
+  const budget = recoverBudgetUi(ctx);
+  if (!budget) return lp;
+  if (lp?.token) {
+    rememberLp(ctx, { ...lp, budgetQuoteUi: budget });
+    return ctx.conversation.lastLp;
+  }
+  const cmp = ctx.conversation.lastLpCompare;
+  if (!cmp) return lp;
+  const picked = pickComparedPool(cmp, { pick: "highest" });
+  if (!picked || picked.thin) return lp;
+  rememberLp(ctx, {
+    token: picked.token,
+    quote: picked.quote,
+    fee: picked.fee,
+    budgetQuoteUi: budget,
+    rangeBps: DEFAULT_LP_RANGE_BPS,
+  });
+  return ctx.conversation.lastLp;
+}
+
 function hasMintSize(lp?: PendingLp): boolean {
   return Boolean(lp && (lp.amountTokenUi || lp.amountQuoteUi || lp.budgetQuoteUi));
+}
+
+function formatAnalyzeLp(raw: string): string {
+  try {
+    const a = JSON.parse(raw) as {
+      token0?: string;
+      token1?: string;
+      fee?: number;
+      midQuotePerToken?: string;
+      tvlUsdApprox?: string;
+      suggestedRangeBps?: number;
+      priceLower?: string;
+      priceUpper?: string;
+      warnings?: string[];
+      pool?: string;
+    };
+    if (!a.pool || a.midQuotePerToken == null) return raw;
+    const tvl = Number(a.tvlUsdApprox);
+    const tvlText = Number.isFinite(tvl) ? `约 $${Math.round(tvl).toLocaleString("en-US")}` : String(a.tvlUsdApprox);
+    const fee = a.fee != null ? `${(a.fee / 10_000).toFixed(2)}%` : "";
+    const lo = a.priceLower != null ? Number(a.priceLower).toFixed(4) : "";
+    const hi = a.priceUpper != null ? Number(a.priceUpper).toFixed(4) : "";
+    const range = a.suggestedRangeBps != null ? `±${(a.suggestedRangeBps / 100).toFixed(0)}%` : "";
+    return [
+      `${a.token0}/${a.token1} · fee ${fee} · 中间价约 ${a.midQuotePerToken} ${a.token1}/${a.token0}`,
+      `池 TVL ${tvlText}${range ? ` · 建议区间 ${range}` : ""}${lo && hi ? `：${lo}–${hi}` : ""}`,
+      ...(a.warnings ?? []),
+    ].join("\n");
+  } catch {
+    return raw;
+  }
 }
 
 export function formatToolReply(raw: string): string {
@@ -138,6 +308,18 @@ export function formatToolReply(raw: string): string {
       uiPrice?: string;
       token?: string;
       quote?: string;
+      kind?: string;
+      disclaimer?: string;
+      highestApr?: { quote: string; feeLabel: string; apr24hPct: number; tvlUsd: number };
+      thickest?: { quote: string; feeLabel: string; tvlUsd: number };
+      pools?: Array<{
+        quote: string;
+        feeLabel: string;
+        apr24hPct: number;
+        tvlUsd: number;
+        volumeUsd24h: number;
+        thin: boolean;
+      }>;
       positions?: Array<{
         tokenId: string;
         token0: string;
@@ -171,6 +353,31 @@ export function formatToolReply(raw: string): string {
     }
     if (data.error === "insufficient_balance") {
       return data.message ?? "余额不足。";
+    }
+    if (data.kind === "lp-compare" && Array.isArray(data.pools)) {
+      if (!data.pools.length) {
+        return "白名单报价资产下没有可用的 Pancake V3 池（只看 USDT/USDC/WBNB）。";
+      }
+      const lines = data.pools.map((p) => {
+        const flag = p.thin ? " · 薄，数字仅供参考" : "";
+        return `${p.quote} ${p.feeLabel} · 费率年化 ${p.apr24hPct.toFixed(1)}% · TVL $${Math.round(p.tvlUsd).toLocaleString("en-US")} · 24h $${Math.round(p.volumeUsd24h).toLocaleString("en-US")}${flag}`;
+      });
+      const top = data.highestApr
+        ? `非薄池最高：${data.highestApr.quote} ${data.highestApr.feeLabel}，约 ${data.highestApr.apr24hPct.toFixed(1)}%（近 24h 手续费年化）。`
+        : "没有达到流动性门槛的池，不能按最高 APR 下单。";
+      const thick = data.thickest
+        ? `TVL 最厚：${data.thickest.quote} ${data.thickest.feeLabel}，约 $${Math.round(data.thickest.tvlUsd).toLocaleString("en-US")}。`
+        : "";
+      return [
+        top,
+        thick,
+        "",
+        ...lines,
+        "",
+        data.disclaimer ?? "不是收益承诺。要加某一档请说：加 100u 那个最高的 / 加 100u 英伟达 WBNB 0.25%。",
+      ]
+        .filter((x) => x !== "")
+        .join("\n");
     }
     if (data.display && data.uiPrice) {
       return [
@@ -262,11 +469,16 @@ export function parseLocalCommand(text: string): LocalCmd {
     return {
       kind: "lp",
       token: spokenLp.token,
-      amountTokenUi: spokenLp.amountTokenUi,
-      amountQuoteUi: spokenLp.amountQuoteUi,
-      budgetQuoteUi: spokenLp.budgetQuoteUi,
+      ...(spokenLp.quote ? { quote: spokenLp.quote } : {}),
+      ...(spokenLp.fee != null ? { fee: spokenLp.fee } : {}),
+      ...(spokenLp.pick ? { pick: spokenLp.pick } : {}),
+      ...(spokenLp.amountTokenUi ? { amountTokenUi: spokenLp.amountTokenUi } : {}),
+      ...(spokenLp.amountQuoteUi ? { amountQuoteUi: spokenLp.amountQuoteUi } : {}),
+      ...(spokenLp.budgetQuoteUi ? { budgetQuoteUi: spokenLp.budgetQuoteUi } : {}),
     };
   }
+  const compared = parseCompareLp(t);
+  if (compared) return { kind: "lp-compare", token: compared.token };
   const quote = t.match(PAIR);
   if (quote) {
     return { kind: "quote", tokenIn: quote[1]!, tokenOut: quote[2]!, amountInUi: quote[3]! };
@@ -280,6 +492,52 @@ export function parseLocalCommand(text: string): LocalCmd {
     return { kind: "lp", token: lp[1]!, amountTokenUi: lp[2], amountQuoteUi: lp[3] };
   }
   return { kind: "none" };
+}
+
+async function ensureLpCompare(ctx: ToolCtx, token: string): Promise<CompareLpResult> {
+  const cur = ctx.conversation.lastLpCompare;
+  try {
+    if (cur && getToken(cur.token).symbol === getToken(token).symbol) return cur;
+  } catch {
+    /* refresh */
+  }
+  const raw = await runTool("compare_lp_pools", JSON.stringify({ token }), ctx);
+  const next = ctx.conversation.lastLpCompare;
+  if (next) return next;
+  return JSON.parse(raw) as CompareLpResult;
+}
+
+async function resolveLpPool(
+  ctx: ToolCtx,
+  cmd: Extract<LocalCmd, { kind: "lp" }>,
+): Promise<{ token: string; quote: string; fee: number; feeLabel: string; aprLabel: string }> {
+  const token = cmd.token || ctx.conversation.lastLpCompare?.token || ctx.conversation.lastLp?.token;
+  if (!token) throw new Error("请先说标的，例如：英伟达最高 apr，或 加 100u 英伟达。");
+  const wantsNamedPool = Boolean(cmd.pick || cmd.quote || cmd.fee != null);
+  if (!wantsNamedPool) {
+    return {
+      token,
+      quote: "USDT",
+      fee: 2500,
+      feeLabel: "0.25%",
+      aprLabel: "未指定档位",
+    };
+  }
+  const cmp = await ensureLpCompare(ctx, token);
+  const picked = pickComparedPool(cmp, { pick: cmd.pick, quote: cmd.quote, fee: cmd.fee });
+  if (!picked) {
+    throw new Error(`找不到可加的白名单 V3 池（${token}${cmd.quote ? " / " + cmd.quote : ""}）。先说「${token}最高apr」看列表。`);
+  }
+  if (picked.thin && cmd.pick === "highest") {
+    throw new Error("没有达到流动性门槛的池，不能按「最高 APR」下单。请指定 USDT 0.25% 等具体档位。");
+  }
+  return {
+    token: picked.token,
+    quote: picked.quote,
+    fee: picked.fee,
+    feeLabel: picked.feeLabel,
+    aprLabel: `${picked.apr24hPct.toFixed(1)}%`,
+  };
 }
 
 async function pickPosition(ctx: ToolCtx, tokenId?: string) {
@@ -348,35 +606,54 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
     ].join("\n");
   }
 
+  if (cmd.kind === "lp-compare") {
+    return runTool("compare_lp_pools", JSON.stringify({ token: cmd.token }), ctx);
+  }
+
   if (cmd.kind === "lp") {
+    const selected = await resolveLpPool(ctx, cmd);
     rememberLp(ctx, {
-      token: cmd.token,
+      token: selected.token,
+      quote: selected.quote,
+      fee: selected.fee,
       amountTokenUi: cmd.amountTokenUi,
       amountQuoteUi: cmd.amountQuoteUi,
       budgetQuoteUi: cmd.budgetQuoteUi,
       rangeBps: DEFAULT_LP_RANGE_BPS,
     });
-    const analysis = await runTool(
-      "analyze_lp",
-      JSON.stringify({ token: cmd.token, rangeBps: DEFAULT_LP_RANGE_BPS }),
-      ctx,
+    const analysis = formatAnalyzeLp(
+      await runTool(
+        "analyze_lp",
+        JSON.stringify({
+          token: selected.token,
+          quote: selected.quote,
+          fee: selected.fee,
+          rangeBps: DEFAULT_LP_RANGE_BPS,
+        }),
+        ctx,
+      ),
     );
     if (!hasMintSize(cmd)) {
       return [analysis, "", "若要加池，发送：加LP NVDAB 0.01 或 帮我加100u的英伟达lp，再回复「确认执行」。默认区间 ±30%。"].join("\n");
     }
     const size = cmd.budgetQuoteUi
-      ? `总预算约 ${cmd.budgetQuoteUi} USDT（按区间公式拆成证书+稳定币，不是对半）`
-      : [cmd.amountTokenUi && `${cmd.amountTokenUi} ${cmd.token}`, cmd.amountQuoteUi && `${cmd.amountQuoteUi} USDT`]
+      ? `总预算约 ${cmd.budgetQuoteUi} u（按区间公式拆成证书+${selected.quote}，不是对半）`
+      : [cmd.amountTokenUi && `${cmd.amountTokenUi} ${cmd.token}`, cmd.amountQuoteUi && `${cmd.amountQuoteUi} ${selected.quote}`]
           .filter(Boolean)
           .join(" + ");
+    const pool = `${selected.quote} ${selected.feeLabel}`;
+    const apr =
+      selected.aprLabel === "未指定档位"
+        ? "不是收益承诺。"
+        : `近 24h 费率年化约 ${selected.aprLabel}，不是承诺。`;
     return [
       analysis,
       "",
-      `已记下加池：${size}，默认区间 ±30%。回复「确认执行」才会生成签名页。`,
+      `已记下加池：${size} · ${pool}，默认区间 ±30%。回复「确认执行」才会生成签名页。${apr}`,
     ].join("\n");
   }
 
-  const lp = ctx.conversation.lastLp;
+  const lp = await hydratePendingLp(ctx);
   const pending =
     lp?.collectTokenId || lp?.decreaseTokenId || lp?.increaseTokenId || hasMintSize(lp)
       ? { type: "lp" as const, ...lp }
@@ -404,6 +681,7 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
       amountTokenUi: pending.amountTokenUi,
       amountQuoteUi: pending.amountQuoteUi,
       budgetQuoteUi: pending.budgetQuoteUi,
+      quote: pending.quote,
       rangeBps: pending.rangeBps ?? DEFAULT_LP_RANGE_BPS,
       fee: pending.fee,
       collectTokenId: pending.collectTokenId,

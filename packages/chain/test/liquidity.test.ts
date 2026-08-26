@@ -13,6 +13,7 @@ import {
 import { amount1FromAmount0 } from "../src/lp-math.js";
 import {
   executionQuotePerUnit,
+  markPairUsd,
   priceDeviationBps,
   swapNotionalUsd,
 } from "../src/valuation.js";
@@ -133,5 +134,29 @@ describe("swap notional and deviation", () => {
       amountOutUi: "0.5",
     });
     expect(priceDeviationBps(exec, 200)).toBe(100);
+  });
+});
+
+describe("markPairUsd", () => {
+  it("does not treat WBNB as $1 when usdPerGas is provided", () => {
+    const nvda = getToken("NVDAB");
+    const wbnb = getToken("WBNB");
+    const withoutGas = markPairUsd({
+      token0: nvda,
+      token1: wbnb,
+      amount0Ui: "74.5",
+      amount1Ui: "17.6",
+      sqrtPriceX96: Q96,
+    });
+    const withGas = markPairUsd({
+      token0: nvda,
+      token1: wbnb,
+      amount0Ui: "74.5",
+      amount1Ui: "17.6",
+      sqrtPriceX96: Q96,
+      usdPerGas: 600,
+    });
+    expect(withGas).toBeCloseTo(withoutGas * 600);
+    expect(withGas).toBeGreaterThan(10_000);
   });
 });

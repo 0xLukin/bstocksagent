@@ -52,6 +52,7 @@ export class IntentStore {
     summary: Record<string, unknown>;
     risks: string[];
     simulationNotes?: string[];
+    simulation?: { ok: boolean; notes: string[] };
     conversationId?: string;
   }): StoredIntent {
     const id = randomUUID();
@@ -72,7 +73,10 @@ export class IntentStore {
       })),
       summary: input.summary,
       risks: input.risks,
-      simulation: { ok: true, notes: input.simulationNotes ?? ["本地编码完成；签名页将再模拟。"] },
+      simulation: input.simulation ?? {
+        ok: true,
+        notes: input.simulationNotes ?? ["本地编码完成；签名页将再模拟。"],
+      },
       txHashes: [],
     };
     writeFileSync(this.file(id), JSON.stringify(intent, null, 2));

@@ -19,7 +19,13 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
     recordTurns(ctx, userText, reply);
     return reply;
   }
-  if (localKind === "positions" || localKind === "collect" || localKind === "decrease" || localKind === "lp") {
+  if (
+    localKind === "positions" ||
+    localKind === "collect" ||
+    localKind === "decrease" ||
+    localKind === "lp" ||
+    localKind === "lp-compare"
+  ) {
     const handled = await runLocalCommand(userText, ctx);
     const reply = formatToolReply(handled ?? "做不到这一步。");
     recordTurns(ctx, userText, reply);
@@ -130,7 +136,7 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
   return [
     "当前为本地规则回复（未配置 DEEPSEEK_API_KEY 也可跑通报价/出意图）。",
     `已记录钱包 ${ctx.conversation.wallet}。地理确认=${ctx.conversation.geoConfirmed}，执行确认=${ctx.conversation.userConfirmed}。`,
-    "例句：报价 USDT→NVDAB 10 ；加LP NVDAB 0.01 ；价格 NVDAB ；我的仓位 ；收手续费 ；确认执行。",
+    "例句：报价 USDT→NVDAB 10 ；英伟达最高apr ；加 100u 那个最高的 ；加LP NVDAB 0.01 ；我的仓位 ；确认执行。",
     `你刚才说：${userText.slice(0, 200)}`,
   ].join("\n");
 }

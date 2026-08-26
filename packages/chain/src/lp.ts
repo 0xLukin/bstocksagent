@@ -30,6 +30,34 @@ export { DEFAULT_LP_RANGE_BPS };
 
 const UINT128_MAX = (1n << 128n) - 1n;
 const MAX_ENUMERATE = 40;
+let usdPerGasCache: { at: number; value: number } | undefined;
+
+/** Mid WBNB/USDT from the first live V3 fee tier. Cached 30s. */
+export async function readUsdPerGas(client: PublicClient): Promise<number> {
+  if (usdPerGasCache && Date.now() - usdPerGasCache.at < 30_000) return usdPerGasCache.value;
+  const wbnb = getToken("WBNB");
+  const usdt = getToken("USDT");
+  for (const fee of [2500, 500, 10000, 100]) {
+    try {
+      const pool = await resolvePoolAddress(wbnb, usdt, fee, client);
+      const state = await readPoolState(pool, client);
+      const mid = quotePerToken({
+        token: wbnb,
+        quote: usdt,
+        token0: getToken(state.token0),
+        token1: getToken(state.token1),
+        sqrtPriceX96: state.sqrtPriceX96,
+      });
+      if (mid > 0) {
+        usdPerGasCache = { at: Date.now(), value: mid };
+        return mid;
+      }
+    } catch {
+      /* next fee */
+    }
+  }
+  return usdPerGasCache?.value ?? 0;
+}
 
 function sortTokens(a: TokenRecord, b: TokenRecord): [TokenRecord, TokenRecord] {
   return a.address.toLowerCase() < b.address.toLowerCase() ? [a, b] : [b, a];
@@ -141,12 +169,14 @@ export async function analyzeLp(args: {
   ]);
   const reserve0Ui = await rawToUiDisplay(client, t0, bal0);
   const reserve1Ui = await rawToUiDisplay(client, t1, bal1);
+  const usdPerGas = t0.kind === "gas" || t1.kind === "gas" ? await readUsdPerGas(client) : undefined;
   const tvl = markPairUsd({
     token0: t0,
     token1: t1,
     amount0Ui: reserve0Ui,
     amount1Ui: reserve1Ui,
     sqrtPriceX96: state.sqrtPriceX96,
+    usdPerGas,
   });
   const rangeBps = args.rangeBps ?? DEFAULT_LP_RANGE_BPS;
   const ticks = rangeAroundTick(state.tick, state.tickSpacing, rangeBps);
@@ -247,12 +277,14 @@ async function snapshotPosition(
     tickUpper,
     sqrtPriceX96: state.sqrtPriceX96,
   });
+  const usdPerGas = t0.kind === "gas" || t1.kind === "gas" ? await readUsdPerGas(client) : undefined;
   const mark = markPairUsd({
     token0: t0,
     token1: t1,
     amount0Ui,
     amount1Ui,
     sqrtPriceX96: state.sqrtPriceX96,
+    usdPerGas,
   });
   const fees = markPairUsd({
     token0: t0,
@@ -260,6 +292,7 @@ async function snapshotPosition(
     amount0Ui: tokensOwed0Ui,
     amount1Ui: tokensOwed1Ui,
     sqrtPriceX96: state.sqrtPriceX96,
+    usdPerGas,
   });
   return {
     tokenId: tokenId.toString(),
@@ -439,13 +472,19 @@ async function planBudgetAmounts(args: {
   });
   const amount0Ui = await rawToUiDisplay(args.client, args.token0, seed.amount0);
   const amount1Ui = await rawToUiDisplay(args.client, args.token1, seed.amount1);
+  const needGasUsd = args.token0.kind === "gas" || args.token1.kind === "gas";
+  const usdPerGas = needGasUsd ? await readUsdPerGas(args.client) : undefined;
   const mark = markPairUsd({
     token0: args.token0,
     token1: args.token1,
     amount0Ui,
     amount1Ui,
     sqrtPriceX96: args.sqrtPriceX96,
+    usdPerGas,
   });
+  if (needGasUsd && !(usdPerGas && usdPerGas > 0)) {
+    throw new Error("无法把 WBNB 池按美元预算拆仓，请改口给出证书数量或改用 USDT 池。");
+  }
   if (!(mark > 0)) throw new Error("无法按预算估算仓位，请改口给出证书数量。");
   const scale = BigInt(Math.max(1, Math.round((budget / mark) * 1_000_000)));
   return planLiquidityAmounts({

@@ -18,6 +18,7 @@ describe("token aliases", () => {
     expect(getToken("微软").symbol).toBe("MSFTB");
     expect(getToken("特斯拉").symbol).toBe("TSLAB");
     expect(getToken("bnb").symbol).toBe("WBNB");
+    expect(getToken("bnb").kind).toBe("gas");
   });
 
   it("still rejects names that are not listed", () => {

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { getAddress, type Address, type PublicClient } from "viem";
 import { erc20Abi } from "./abis.js";
-import { checksum } from "./addresses.js";
+import { checksum, PANCAKE_BSC } from "./addresses.js";
 import { configPath } from "./paths.js";
 import {
   balanceOfUI,
@@ -103,14 +103,34 @@ export function loadPoolsFile(): PoolsFile {
 
 export function pancakeFromConfig(): PancakeAddresses {
   const p = loadPoolsFile().pancake;
+  const permit2 = checksum(p.permit2);
+  if (permit2.toLowerCase() !== PANCAKE_BSC.permit2.toLowerCase()) {
+    throw new Error(
+      `pools.json permit2 ${permit2} is not the canonical Pancake Permit2 ${PANCAKE_BSC.permit2}`,
+    );
+  }
   return {
     smartRouter: checksum(p.smartRouter),
     nfpm: checksum(p.nfpm),
     quoterV2: checksum(p.quoterV2),
     factory: checksum(p.factory),
     swapRouterV3: checksum(p.swapRouterV3),
-    permit2: checksum(p.permit2),
+    permit2,
   };
+}
+
+/** Spoken "BNB" means native gas. "WBNB" stays the ERC-20. */
+export function wantsNativeBnb(symbolOrAddress: string): boolean {
+  const raw = symbolOrAddress.trim();
+  if (!raw || raw.startsWith("0x") || raw.startsWith("0X")) return false;
+  const key = raw.toUpperCase();
+  return key === "BNB" || key === "NATIVE" || key === "TBNB";
+}
+
+/** Keep BNB distinct from WBNB after whitelist lookup. */
+export function swapAssetSymbol(symbolOrAddress: string): string {
+  if (wantsNativeBnb(symbolOrAddress)) return "BNB";
+  return getToken(symbolOrAddress).symbol;
 }
 
 export function lookupKey(symbolOrAddress: string): string {
@@ -146,6 +166,7 @@ export function formatWhitelistForPrompt(): string {
   return [
     "当前白名单（链上 symbol 在前）。用户说 NVDA、bNVDA、英伟达、NVIDIA 时一律按 NVDAB 处理，其它标的同理。",
     "先调用 get_bstock_price / quote_swap，禁止在未查工具时断言「不在白名单」。get_bstock_price 返回 1 股值多少报价资产。白名单没有 AAPL、COIN、bAAPL、bCOIN。",
+    "用户说 BNB 是钱包里的原生 BNB（tokenIn/tokenOut 用 BNB）；说 WBNB 才是包装代币。两者余额不同，不要互相顶替。",
     ...lines,
   ].join("\n");
 }
@@ -187,6 +208,44 @@ export function findConfiguredPool(tokenA: string, tokenB: string, fee?: number)
   });
 }
 
+const onchainDecimalsCache = new Map<string, number>();
+
+export function resetOnchainDecimalsCache() {
+  onchainDecimalsCache.clear();
+}
+
+/** tokens.json is the default; runtime re-reads ERC-20 decimals() and caches by address. */
+export async function readOnchainDecimals(
+  client: PublicClient,
+  address: Address,
+  fallback: number,
+): Promise<number> {
+  const key = address.toLowerCase();
+  const cached = onchainDecimalsCache.get(key);
+  if (cached !== undefined) return cached;
+  try {
+    const raw = await client.readContract({
+      address,
+      abi: erc20Abi,
+      functionName: "decimals",
+    });
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 0 || n > 36) {
+      onchainDecimalsCache.set(key, fallback);
+      return fallback;
+    }
+    onchainDecimalsCache.set(key, n);
+    return n;
+  } catch {
+    return fallback;
+  }
+}
+
+async function decimalsFor(client: PublicClient | undefined, token: TokenRecord): Promise<number> {
+  if (!client) return token.decimals;
+  return readOnchainDecimals(client, token.address, token.decimals);
+}
+
 /**
  * Convert a user-facing (UI) amount into raw units for contract calls.
  * For ERC-8056 tokens this uses fromUIAmount (or local fallback if offline).
@@ -196,7 +255,8 @@ export async function uiDisplayToRaw(
   token: TokenRecord,
   uiDisplay: string,
 ): Promise<{ raw: bigint; uiScaled: bigint; uiMultiplier?: bigint }> {
-  const uiScaled = parseFixed(uiDisplay, token.decimals);
+  const decimals = await decimalsFor(client, token);
+  const uiScaled = parseFixed(uiDisplay, decimals);
   if (!token.scaledUi) {
     return { raw: uiScaled, uiScaled };
   }
@@ -213,17 +273,24 @@ export async function rawToUiDisplay(
   token: TokenRecord,
   raw: bigint,
 ): Promise<string> {
-  if (!token.scaledUi) return formatFixed(raw, token.decimals);
+  const decimals = await decimalsFor(client, token);
+  if (!token.scaledUi) return formatFixed(raw, decimals);
   if (!client) throw new Error(`ERC-8056 token ${token.symbol} requires RPC for toUIAmount`);
   const ui = await toUIAmount(client, token.address, raw);
-  return formatFixed(ui, token.decimals);
+  return formatFixed(ui, decimals);
 }
 
 export async function readBalanceUi(
   client: PublicClient,
   token: TokenRecord,
   account: Address,
+  opts?: { native?: boolean },
 ): Promise<{ raw: bigint; uiDisplay: string }> {
+  const decimals = await decimalsFor(client, token);
+  if (opts?.native) {
+    const raw = await client.getBalance({ address: account });
+    return { raw, uiDisplay: formatFixed(raw, decimals) };
+  }
   const raw = await client.readContract({
     address: token.address,
     abi: erc20Abi,
@@ -232,7 +299,7 @@ export async function readBalanceUi(
   });
   if (token.scaledUi) {
     const ui = await balanceOfUI(client, token.address, account);
-    return { raw, uiDisplay: formatFixed(ui, token.decimals) };
+    return { raw, uiDisplay: formatFixed(ui, decimals) };
   }
-  return { raw, uiDisplay: formatFixed(raw, token.decimals) };
+  return { raw, uiDisplay: formatFixed(raw, decimals) };
 }

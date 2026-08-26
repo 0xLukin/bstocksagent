@@ -2,7 +2,8 @@
   "chainId": 56,
   "notes": [
     "PancakeSwap V3 addresses reconfirmed against https://developer.pancakeswap.finance/contracts/v3/addresses and https://docs.pancakeswap.finance/trading-tools/building-trading-agents-on-pancakeswap-v3 (2026-08-26).",
-    "MVP is V3 only. Single-hop whitelist pairs first; Smart Router used as fallback.",
+    "MVP is V3 only. Quotes compare preferredFee + feeTiers, then two-hop via quotePriority (USDT → USDC → WBNB).",
+    "Smart Router 0x13f4… pulls ERC-20 via transferFrom, not Permit2. permit2 is the canonical address and is checksum-verified; do not approve-only-to-Permit2 or swaps fail.",
     "Pool addresses are resolved via Factory.getPool(token, quote, fee) at runtime when omitted.",
     "NVDAB/USDT 0.25% is the documented flagship pair."
   ],

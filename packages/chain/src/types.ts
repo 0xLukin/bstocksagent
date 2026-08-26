@@ -48,6 +48,10 @@ export type SwapQuote = {
   route: "v3-single" | "smart-router";
   hops: { tokenIn: string; tokenOut: string; fee: number }[];
   sqrtPriceX96After?: bigint;
+  /** User pays native BNB (msg.value). tokenIn is still WBNB for the path. */
+  nativeIn: boolean;
+  /** User receives native BNB via unwrapWETH9. tokenOut is still WBNB for the path. */
+  nativeOut: boolean;
 };
 
 export type IntentKind =

@@ -1,7 +1,8 @@
-import { getAddress, type Address, type Hex, type PublicClient } from "viem";
+import { formatEther, getAddress, type Address, type Hex, type PublicClient } from "viem";
 import {
   analyzeLp,
   assertPositionOwner,
+  compareLpPools,
   buildCollectTx,
   buildDecreaseLpTxs,
   buildIncreaseLpTxs,
@@ -18,7 +19,11 @@ import {
   quoteSwap,
   readBalanceUi,
   readPosition,
+  simulatePreparedTxs,
+  swapAssetSymbol,
   swapNotionalUsd,
+  wantsNativeBnb,
+  type PreparedTx,
 } from "@bstocks/chain";
 import { evaluateRisk, loadRiskConfig } from "@bstocks/risk";
 import { sendConversationOffer, TermixClient } from "@bstocks/termix";
@@ -70,6 +75,19 @@ export const TOOL_DEFS = [
           fee: { type: "number" },
         },
         required: ["tokenIn", "tokenOut", "amountInUi"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "compare_lp_pools",
+      description:
+        "List whitelist V3 pools for a bStock (USDT/USDC/WBNB) with Pancake Explorer 24h fee APR, TVL, and volume. Use for 最高apr / 哪个池收益高. Does not create an intent.",
+      parameters: {
+        type: "object",
+        properties: { token: { type: "string" } },
+        required: ["token"],
       },
     },
   },
@@ -139,6 +157,7 @@ export const TOOL_DEFS = [
         type: "object",
         properties: {
           token: { type: "string" },
+          quote: { type: "string", description: "USDT, USDC, or WBNB. Required when the user picked a compared pool." },
           amountTokenUi: { type: "string" },
           amountQuoteUi: { type: "string" },
           budgetQuoteUi: { type: "string", description: "Total USDT budget to deploy (split by V3 math, not 50/50)." },
@@ -260,6 +279,22 @@ function signerOf(ctx: ToolCtx, intent: { id: string }) {
   return `${ctx.signerWebUrl}/t/${intent.id}`;
 }
 
+async function intentSimulation(client: PublicClient, account: Address, txs: PreparedTx[]) {
+  try {
+    const sim = await simulatePreparedTxs(client, account, txs);
+    const gas = sim.gasFeeWei > 0n ? `预估矿工费约 ${formatEther(sim.gasFeeWei)} BNB` : undefined;
+    return {
+      ok: !sim.hardFail,
+      notes: [...sim.notes, gas].filter((x): x is string => Boolean(x)),
+    };
+  } catch (err) {
+    return {
+      ok: true,
+      notes: [`Runtime 模拟未完成：${err instanceof Error ? err.message : String(err)}。签名页将再模拟。`],
+    };
+  }
+}
+
 async function midQuotePerShare(token: string, quote: string, client: PublicClient): Promise<number> {
   const q = await quoteSwap({ tokenIn: token, tokenOut: quote, amountInUi: "1", client });
   return parseUiNumber(q.amountOutUi);
@@ -295,8 +330,8 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       client,
     });
     ctx.conversation.lastQuote = {
-      tokenIn: q.tokenIn.symbol,
-      tokenOut: q.tokenOut.symbol,
+      tokenIn: q.nativeIn ? "BNB" : q.tokenIn.symbol,
+      tokenOut: q.nativeOut ? "BNB" : q.tokenOut.symbol,
       amountInUi: q.amountInUi,
     };
     delete ctx.conversation.lastLp;
@@ -310,6 +345,14 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     });
   }
 
+  if (name === "compare_lp_pools") {
+    const compared = await compareLpPools(String(args.token));
+    ctx.conversation.lastLpCompare = compared;
+    delete ctx.conversation.lastQuote;
+    ctx.conversations.save(ctx.conversation);
+    return JSON.stringify(compared);
+  }
+
   if (name === "analyze_lp") {
     const rangeBps = args.rangeBps != null ? Number(args.rangeBps) : DEFAULT_LP_RANGE_BPS;
     const analysis = await analyzeLp({
@@ -320,9 +363,13 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       client,
     });
     const token = getToken(String(args.token)).symbol;
+    const quote = args.quote
+      ? getToken(String(args.quote === "BNB" ? "WBNB" : args.quote)).symbol
+      : ctx.conversation.lastLp?.quote;
     ctx.conversation.lastLp = {
       ...ctx.conversation.lastLp,
       token,
+      quote,
       fee: analysis.fee,
       rangeBps: analysis.suggestedRangeBps,
     };
@@ -338,34 +385,41 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "read_balance") {
-    const token = getToken(String(args.token));
+    const requested = String(args.token);
+    const token = getToken(requested);
     const account = getAddress(String(args.account ?? ctx.conversation.wallet ?? "")) as Address;
-    return JSON.stringify(await readBalanceUi(client, token, account));
+    const bal = await readBalanceUi(client, token, account, { native: wantsNativeBnb(requested) });
+    return JSON.stringify({ ...bal, symbol: swapAssetSymbol(requested) });
   }
 
   if (name === "create_swap_intent") {
     gate(ctx.conversation);
     const cfg = loadRiskConfig();
     const slippageBps = Number(args.slippageBps ?? cfg.defaultSlippageBps);
-    const tokenIn = getToken(String(args.tokenIn));
-    const tokenOut = getToken(String(args.tokenOut));
-    const bal = await readBalanceUi(client, tokenIn, ctx.conversation.wallet!);
+    const tokenInArg = String(args.tokenIn);
+    const tokenOutArg = String(args.tokenOut);
+    const nativeIn = wantsNativeBnb(tokenInArg);
+    const nativeOut = wantsNativeBnb(tokenOutArg);
+    const tokenIn = getToken(tokenInArg);
+    const tokenOut = getToken(tokenOutArg);
+    const bal = await readBalanceUi(client, tokenIn, ctx.conversation.wallet!, { native: nativeIn });
     const need = (await quoteSwap({
-      tokenIn: tokenIn.symbol,
-      tokenOut: tokenOut.symbol,
+      tokenIn: tokenInArg,
+      tokenOut: tokenOutArg,
       amountInUi: String(args.amountInUi),
       fee: args.fee != null ? Number(args.fee) : undefined,
       client,
     })).amountInRaw;
     if (bal.raw < need) {
+      const symbol = nativeIn ? "BNB" : tokenIn.symbol;
       return JSON.stringify({
         error: "insufficient_balance",
-        message: `余额不足：钱包有 ${bal.uiDisplay} ${tokenIn.symbol}，这笔要 ${args.amountInUi}。`,
+        message: `余额不足：钱包有 ${bal.uiDisplay} ${symbol}，这笔要 ${args.amountInUi}。`,
       });
     }
     const built = await buildSwapTxs({
-      tokenIn: tokenIn.symbol,
-      tokenOut: tokenOut.symbol,
+      tokenIn: tokenInArg,
+      tokenOut: tokenOutArg,
       amountInUi: String(args.amountInUi),
       fee: args.fee != null ? Number(args.fee) : undefined,
       recipient: ctx.conversation.wallet!,
@@ -397,13 +451,26 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         poolTvl = 0;
       }
     }
-    const notional = swapNotionalUsd({
+    let notional = swapNotionalUsd({
       tokenIn,
       tokenOut,
       amountInUi: built.quote.amountInUi,
       amountOutUi: built.quote.amountOutUi,
       midQuotePerUnit: mid,
     });
+    if (nativeIn || tokenIn.kind === "gas") {
+      try {
+        const bnbUsd = await quoteSwap({
+          tokenIn: "WBNB",
+          tokenOut: "USDT",
+          amountInUi: String(args.amountInUi),
+          client,
+        });
+        notional = parseUiNumber(bnbUsd.amountOutUi);
+      } catch {
+        /* keep swapNotionalUsd */
+      }
+    }
     const verdict = riskFor({
       tokenIn: tokenIn.symbol,
       tokenOut: tokenOut.symbol,
@@ -415,14 +482,16 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       state: ctx.conversation,
     });
     if (!verdict.ok) return JSON.stringify({ error: "risk_blocked", blockers: verdict.blockers });
+    const displayIn = nativeIn || built.quote.nativeIn ? "BNB" : built.quote.tokenIn.symbol;
+    const displayOut = nativeOut || built.quote.nativeOut ? "BNB" : built.quote.tokenOut.symbol;
     const intent = ctx.intents.create({
       kind: "swap",
       conversationId: ctx.conversation.id,
       userAddress: ctx.conversation.wallet!,
       txs: built.txs,
       summary: {
-        tokenIn: built.quote.tokenIn.symbol,
-        tokenOut: built.quote.tokenOut.symbol,
+        tokenIn: displayIn,
+        tokenOut: displayOut,
         amountInUi: built.quote.amountInUi,
         amountOutUi: built.quote.amountOutUi,
         amountInRaw: built.quote.amountInRaw.toString(),
@@ -430,10 +499,20 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         amountOutMin: built.amountOutMin.toString(),
         slippageBps,
         route: built.quote.route,
+        hops: built.quote.hops,
+        nativeIn: built.quote.nativeIn,
+        nativeOut: built.quote.nativeOut,
         notionalUsd: notional.toFixed(2),
         midQuotePerToken: mid || undefined,
       },
-      risks: [...verdict.warnings, ...(built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : [])],
+      risks: [
+        ...verdict.warnings,
+        ...built.notes,
+        ...(built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : []),
+        ...(built.quote.nativeIn ? ["付出的是钱包里的原生 BNB，不是 WBNB。"] : []),
+        ...(built.quote.nativeOut ? ["兑换结果会 unwrap 成原生 BNB。"] : []),
+      ],
+      simulation: await intentSimulation(client, ctx.conversation.wallet!, built.txs),
     });
     consumePending(ctx);
     const signerUrl = signerOf(ctx, intent);
@@ -481,6 +560,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
           analysis: { token0: pos.token0.symbol, token1: pos.token1.symbol },
         },
         risks: [...verdict.warnings, "收取手续费不会移除本金，但需用户自行签名。"],
+        simulation: await intentSimulation(client, ctx.conversation.wallet!, [tx]),
       });
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
@@ -515,6 +595,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         txs: built.txs,
         summary: built.summary,
         risks: [...verdict.warnings, ...built.analysis.warnings],
+        simulation: await intentSimulation(client, ctx.conversation.wallet!, built.txs),
       });
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
@@ -551,6 +632,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
         txs: built.txs,
         summary: built.summary,
         risks: [...verdict.warnings, ...built.analysis.warnings],
+        simulation: await intentSimulation(client, ctx.conversation.wallet!, built.txs),
       });
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
@@ -563,11 +645,12 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     const built = await buildMintLpTxs({
       userAddress: ctx.conversation.wallet!,
       token,
+      quote: args.quote ? String(args.quote) : ctx.conversation.lastLp?.quote,
       amountTokenUi: args.amountTokenUi ? String(args.amountTokenUi) : undefined,
       amountQuoteUi: args.amountQuoteUi ? String(args.amountQuoteUi) : undefined,
       budgetQuoteUi: args.budgetQuoteUi ? String(args.budgetQuoteUi) : undefined,
       rangeBps: args.rangeBps != null ? Number(args.rangeBps) : DEFAULT_LP_RANGE_BPS,
-      fee: args.fee != null ? Number(args.fee) : undefined,
+      fee: args.fee != null ? Number(args.fee) : ctx.conversation.lastLp?.fee,
       slippageBps: cfg.defaultSlippageBps,
       deadlineSeconds: cfg.deadlineSeconds,
       client,
@@ -581,9 +664,10 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       parseUiNumber(String(built.summary.amount1Ui ?? "0")) +
       parseUiNumber(String(built.summary.amount0Ui ?? "0")) *
         (parseUiNumber(String(built.summary.midQuotePerToken ?? "0")) || 1);
+    const quote = String(args.quote ?? ctx.conversation.lastLp?.quote ?? "USDT");
     const verdict = riskFor({
       tokenIn: token,
-      tokenOut: "USDT",
+      tokenOut: quote,
       slippageBps: cfg.defaultSlippageBps,
       notionalUsd: mark || notional,
       poolLiquidityUsd: parseUiNumber(built.analysis.tvlUsdApprox),
@@ -599,6 +683,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       txs: built.txs,
       summary: built.summary,
       risks: [...verdict.warnings, ...built.analysis.warnings],
+      simulation: await intentSimulation(client, ctx.conversation.wallet!, built.txs),
     });
     consumePending(ctx);
     const signerUrl = signerOf(ctx, intent);

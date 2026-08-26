@@ -18,7 +18,8 @@ const NAMES: Record<string, string> = {
   QQQB: "纳指",
   USDT: "USDT",
   USDC: "USDC",
-  WBNB: "BNB",
+  WBNB: "WBNB",
+  BNB: "原生 BNB",
 };
 
 const KIND_TITLE: Record<string, string> = {
@@ -78,6 +79,8 @@ export function remainingLabel(iso: string): { expired: boolean; text: string } 
 
 export function txTitle(label: string): string {
   if (/approve/i.test(label)) return "授权";
+  if (/wrap/i.test(label)) return "包装 BNB";
+  if (/unwrap/i.test(label)) return "解包 BNB";
   if (/swap/i.test(label)) return "兑换";
   if (/increase/i.test(label)) return "加仓";
   if (/decrease|withdraw/i.test(label)) return "撤出";

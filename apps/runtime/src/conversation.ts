@@ -1,12 +1,14 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAddress, type Address } from "viem";
+import type { CompareLpResult } from "@bstocks/chain";
 import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
 import type { InboxMessage } from "@bstocks/termix";
 
 export type PendingQuote = { tokenIn: string; tokenOut: string; amountInUi: string };
 export type PendingLp = {
   token: string;
+  quote?: string;
   amountTokenUi?: string;
   amountQuoteUi?: string;
   budgetQuoteUi?: string;
@@ -17,6 +19,7 @@ export type PendingLp = {
   decreaseTokenId?: string;
   decreaseBps?: number;
 };
+
 export type ChatTurn = { role: "user" | "assistant"; content: string; at?: string; messageId?: string };
 export type LastIntent = {
   id: string;
@@ -38,6 +41,7 @@ export type ConversationState = {
   lastOfferHint?: string;
   lastQuote?: PendingQuote;
   lastLp?: PendingLp;
+  lastLpCompare?: CompareLpResult;
   lastIntent?: LastIntent;
   turns?: ChatTurn[];
   seenMessageIds?: string[];
@@ -209,6 +213,27 @@ export function formatRuntimeState(state: ConversationState): string {
     buyer: state.buyer,
     lastQuote: state.lastQuote,
     lastLp: state.lastLp,
+    lastLpCompare: state.lastLpCompare
+      ? {
+          token: state.lastLpCompare.token,
+          highestApr: state.lastLpCompare.highestApr
+            ? {
+                quote: state.lastLpCompare.highestApr.quote,
+                fee: state.lastLpCompare.highestApr.fee,
+                feeLabel: state.lastLpCompare.highestApr.feeLabel,
+                apr24hPct: state.lastLpCompare.highestApr.apr24hPct,
+              }
+            : undefined,
+          thickest: state.lastLpCompare.thickest
+            ? {
+                quote: state.lastLpCompare.thickest.quote,
+                fee: state.lastLpCompare.thickest.fee,
+                feeLabel: state.lastLpCompare.thickest.feeLabel,
+                tvlUsd: state.lastLpCompare.thickest.tvlUsd,
+              }
+            : undefined,
+        }
+      : undefined,
     lastOrderId: state.lastOrderId,
     lastIntent: state.lastIntent
       ? { id: state.lastIntent.id, kind: state.lastIntent.kind, signerUrl: state.lastIntent.signerUrl }
@@ -242,8 +267,16 @@ export function formatRuntimeState(state: ConversationState): string {
       : [lp.amountTokenUi && `${lp.amountTokenUi} ${lp.token}`, lp.amountQuoteUi && `${lp.amountQuoteUi} USDT`]
           .filter(Boolean)
           .join(" + ");
+    const pool = [lp.quote, lp.fee != null ? `fee ${lp.fee}` : undefined].filter(Boolean).join(" ");
     lines.push(
-      `待执行加池：${size}。用户说「确认」后必须立即 create_lp_intent（用记忆卡 lastLp），禁止再问操作类型。`,
+      `待执行加池：${size}${pool ? ` · ${pool}` : ""}。用户说「确认」后必须立即 create_lp_intent（用记忆卡 lastLp 的 token/quote/fee），禁止再问操作类型、禁止改回默认 USDT 2500。`,
+    );
+  } else if (state.lastLpCompare) {
+    const top = state.lastLpCompare.highestApr;
+    lines.push(
+      `已查过 ${state.lastLpCompare.token} 的 V3 池费率年化。用户指定某一档（最高 / WBNB / 0.25%）并给出金额后，必须按该 quote+fee 写入 lastLp 再 create_lp_intent。${
+        top ? `当前非薄池最高约 ${top.apr24hPct.toFixed(1)}%（${top.quote} ${top.feeLabel}）。` : ""
+      }不要承诺收益。`,
     );
   } else {
     lines.push(
