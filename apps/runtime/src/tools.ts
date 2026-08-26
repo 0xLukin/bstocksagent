@@ -327,6 +327,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       tokenOut: String(args.tokenOut),
       amountInUi: String(args.amountInUi),
       fee: args.fee != null ? Number(args.fee) : undefined,
+      minPoolTvlUsd: loadRiskConfig().minPoolLiquidityUsd,
       client,
     });
     ctx.conversation.lastQuote = {
@@ -408,6 +409,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       tokenOut: tokenOutArg,
       amountInUi: String(args.amountInUi),
       fee: args.fee != null ? Number(args.fee) : undefined,
+      minPoolTvlUsd: cfg.minPoolLiquidityUsd,
       client,
     })).amountInRaw;
     if (bal.raw < need) {
@@ -422,6 +424,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       tokenOut: tokenOutArg,
       amountInUi: String(args.amountInUi),
       fee: args.fee != null ? Number(args.fee) : undefined,
+      minPoolTvlUsd: cfg.minPoolLiquidityUsd,
       recipient: ctx.conversation.wallet!,
       slippageBps,
       deadlineSeconds: cfg.deadlineSeconds,

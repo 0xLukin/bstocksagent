@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { PANCAKE_BSC } from "../src/addresses.js";
 import {
   hopFeeTiers,
+  pickBestQuote,
   quoteBridges,
   quoteFeeTiers,
   richerQuote,
@@ -45,6 +46,26 @@ describe("quote routing config", () => {
     };
     expect(richerQuote(two, single)).toBe(single);
     expect(richerQuote(single, { ...two, amountOut: 11n }).amountOut).toBe(11n);
+  });
+
+  it("does not pick a thin fee tier just because amountOut is a hair higher", () => {
+    const thin = {
+      amountOut: 4690n,
+      fee: 500,
+      tvlUsd: 738,
+      route: "v3-single" as const,
+      hops: [{ tokenIn: "USDT", tokenOut: "NVDAB", fee: 500 }],
+    };
+    const thick = {
+      amountOut: 4680n,
+      fee: 2500,
+      tvlUsd: 1_600_000,
+      route: "v3-single" as const,
+      hops: [{ tokenIn: "USDT", tokenOut: "NVDAB", fee: 2500 }],
+    };
+    expect(pickBestQuote([thin, thick], 5000)?.fee).toBe(2500);
+    expect(pickBestQuote([thin], 5000)?.fee).toBe(500);
+    expect(pickBestQuote([thin, { ...thick, tvlUsd: undefined }], 5000)?.fee).toBe(2500);
   });
 });
 

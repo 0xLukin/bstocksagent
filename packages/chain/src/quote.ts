@@ -1,5 +1,5 @@
 import { type Address, type PublicClient } from "viem";
-import { factoryAbi, poolAbi, quoterV2Abi } from "./abis.js";
+import { erc20Abi, factoryAbi, poolAbi, quoterV2Abi } from "./abis.js";
 import { ZERO_ADDRESS } from "./addresses.js";
 import { getPublicClient } from "./client.js";
 import {
@@ -13,12 +13,18 @@ import {
 } from "./registry.js";
 import { encodeV3Path } from "./ticks.js";
 import type { SwapQuote, TokenRecord } from "./types.js";
+import { markPairUsd, quotePerToken } from "./valuation.js";
+
+/** Same default as config/risk.json minPoolLiquidityUsd. Thin pools can quote a hair more on tiny size. */
+export const DEFAULT_MIN_QUOTE_TVL_USD = 5_000;
 
 export type QuoteArgs = {
   tokenIn: string;
   tokenOut: string;
   amountInUi: string;
   fee?: number;
+  /** Skip singles below this TVL unless the user pinned a fee. */
+  minPoolTvlUsd?: number;
   client?: PublicClient;
 };
 
@@ -26,6 +32,7 @@ export type QuoteCandidate = {
   amountOut: bigint;
   fee: number;
   pool?: Address;
+  tvlUsd?: number;
   route: SwapQuote["route"];
   hops: SwapQuote["hops"];
   sqrtPriceX96After?: bigint;
@@ -73,6 +80,22 @@ export function richerQuote(a: QuoteCandidate | undefined, b: QuoteCandidate): Q
   return a;
 }
 
+/** Prefer a pool that clears the TVL floor; only then maximize amountOut. */
+export function pickBestQuote(candidates: QuoteCandidate[], minTvlUsd: number): QuoteCandidate | undefined {
+  const thick = candidates.filter((c) => (c.tvlUsd ?? 0) >= minTvlUsd);
+  if (thick.length) {
+    let best: QuoteCandidate | undefined;
+    for (const row of thick) best = richerQuote(best, row);
+    return best;
+  }
+  const preferredFee = loadPoolsFile().preferredFee ?? 2500;
+  const preferred = candidates.filter((c) => c.route === "v3-single" && c.fee === preferredFee);
+  const pool = preferred.length ? preferred : candidates;
+  let best: QuoteCandidate | undefined;
+  for (const row of pool) best = richerQuote(best, row);
+  return best;
+}
+
 async function resolvePool(
   client: PublicClient,
   tokenA: TokenRecord,
@@ -90,6 +113,53 @@ async function resolvePool(
   });
   if (pool.toLowerCase() === ZERO_ADDRESS.toLowerCase()) return undefined;
   return pool;
+}
+
+async function estimatePoolTvlUsd(client: PublicClient, pool: Address): Promise<number> {
+  const state = await readPoolState(pool, client);
+  const t0 = getToken(state.token0);
+  const t1 = getToken(state.token1);
+  const [bal0, bal1] = await Promise.all([
+    client.readContract({ address: t0.address, abi: erc20Abi, functionName: "balanceOf", args: [pool] }),
+    client.readContract({ address: t1.address, abi: erc20Abi, functionName: "balanceOf", args: [pool] }),
+  ]);
+  const amount0Ui = await rawToUiDisplay(client, t0, bal0);
+  const amount1Ui = await rawToUiDisplay(client, t1, bal1);
+  let usdPerGas: number | undefined;
+  if (t0.kind === "gas" || t1.kind === "gas") {
+    usdPerGas = await readUsdPerGasForQuote(client);
+  }
+  return markPairUsd({
+    token0: t0,
+    token1: t1,
+    amount0Ui,
+    amount1Ui,
+    sqrtPriceX96: state.sqrtPriceX96,
+    usdPerGas,
+  });
+}
+
+async function readUsdPerGasForQuote(client: PublicClient): Promise<number> {
+  const wbnb = getToken("WBNB");
+  const usdt = getToken("USDT");
+  for (const fee of [2500, 500, 10000, 100]) {
+    const pool = await resolvePool(client, wbnb, usdt, fee);
+    if (!pool) continue;
+    try {
+      const state = await readPoolState(pool, client);
+      const mid = quotePerToken({
+        token: wbnb,
+        quote: usdt,
+        token0: getToken(state.token0),
+        token1: getToken(state.token1),
+        sqrtPriceX96: state.sqrtPriceX96,
+      });
+      if (mid > 0) return mid;
+    } catch {
+      /* next fee */
+    }
+  }
+  return 0;
 }
 
 async function quoteSingle(
@@ -166,13 +236,23 @@ export async function quoteSwap(args: QuoteArgs): Promise<SwapQuote> {
 
   const singleFees = quoteFeeTiers(args.fee);
   let lastError: unknown;
+  const minTvl = args.minPoolTvlUsd ?? DEFAULT_MIN_QUOTE_TVL_USD;
   const singles = await mapLimit(singleFees, 4, async (fee) => {
     try {
       const q = await quoteSingle(client, tokenIn, tokenOut, amountInRaw, fee);
+      let tvlUsd: number | undefined;
+      if (q.pool) {
+        try {
+          tvlUsd = await estimatePoolTvlUsd(client, q.pool);
+        } catch {
+          tvlUsd = undefined;
+        }
+      }
       return {
         amountOut: q.amountOut,
         fee,
         pool: q.pool,
+        tvlUsd,
         route: "v3-single" as const,
         hops: [{ tokenIn: tokenIn.symbol, tokenOut: tokenOut.symbol, fee }],
         sqrtPriceX96After: q.sqrtPriceX96After,
@@ -183,11 +263,12 @@ export async function quoteSwap(args: QuoteArgs): Promise<SwapQuote> {
     }
   });
 
-  let best: QuoteCandidate | undefined;
-  for (const row of singles) best = richerQuote(best, row);
+  const bestSingle = args.fee ? pickBestQuote(singles, 0) : pickBestQuote(singles, minTvl);
+  const thickSingle = singles.some((s) => (s.tvlUsd ?? 0) >= minTvl);
+  let best: QuoteCandidate | undefined = bestSingle;
 
-  // Explicit fee = that pool only. Two-hop is fallback when it misses.
-  if (best && args.fee) {
+  // Explicit fee = that pool only. Thick single beats a two-hop that only looks richer.
+  if (best && (args.fee || thickSingle)) {
     return {
       tokenIn,
       tokenOut,

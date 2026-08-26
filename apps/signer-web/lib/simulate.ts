@@ -59,10 +59,14 @@ export async function simulateIntentTxs(
         notes.push(`第 ${i + 1} 笔需等授权上链，已按同类交易估 gas`);
         continue;
       }
+      const head = message.split("\n")[0] ?? message;
+      const expired = /too old|Transaction too old|EXPIRED|Transaction expired/i.test(message);
       return {
         status: "fail",
         notes,
-        error: `第 ${i + 1} 笔模拟失败：${message.split("\n")[0]!.slice(0, 160)}`,
+        error: expired
+          ? `第 ${i + 1} 笔的链上截止时间已过（Transaction too old）。不要签这一页，回对话再说一次「确认执行」。`
+          : `第 ${i + 1} 笔模拟失败：${head.slice(0, 160)}`,
       };
     }
   }
