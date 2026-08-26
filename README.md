@@ -1,4 +1,4 @@
-# bstocks-yield
+# bstocks-yield-agent
 
 BNB Chain 上的非托管 Agent：用口语买卖白名单 [bStocks](https://bstocks.com/)，并在 PancakeSwap **仅 V3** 加、管流动性。跑在 [Termix](https://docs.termix.ai/) 上，买家自己的钱包签名，Agent 碰不到私钥。
 
