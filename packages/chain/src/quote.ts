@@ -224,7 +224,7 @@ export async function quoteSwap(args: QuoteArgs): Promise<SwapQuote> {
   const nativeIn = wantsNativeBnb(args.tokenIn);
   const nativeOut = wantsNativeBnb(args.tokenOut);
   if (nativeIn && nativeOut) {
-    throw new Error("原生 BNB 不能兑原生 BNB");
+    throw new Error("Native BNB cannot be swapped for native BNB");
   }
   const tokenIn = getToken(args.tokenIn);
   const tokenOut = getToken(args.tokenOut);

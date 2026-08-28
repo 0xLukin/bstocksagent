@@ -1,5 +1,5 @@
 /**
- * Dry-run safe: prepares a Termix agent mint for handle bstocks-yield.
+ * Dry-run safe: prepares a Termix agent mint for handle "bStocks".
  * Does NOT broadcast unless --broadcast is passed AND WALLET_KEY is set.
  */
 import { loadRepoEnv } from "@bstocks/chain";
@@ -7,7 +7,7 @@ import { agentByTx, broadcastIntent, fetchContracts, nameAvailability, prepareMi
 
 loadRepoEnv();
 
-const HANDLE = process.env.TERMIX_AGENT_HANDLE ?? "bstocks-yield";
+const HANDLE = process.env.TERMIX_AGENT_HANDLE ?? "bStocks";
 
 async function main() {
   const broadcast = process.argv.includes("--broadcast");
@@ -31,10 +31,10 @@ async function main() {
   await walletLogin(client);
   const prepared = await prepareMint(client, {
     name: HANDLE,
-    displayName: "bStocks Yield",
+    displayName: "bStocks Agent",
     category: "Automation & Ops",
     description:
-      "非托管 bStocks 交易与 PancakeSwap V3 LP 助手。用户自行签名；不构成投资建议；美国及受限地区不可用。",
+      "Non-custodial bStocks trading and PancakeSwap V3 LP assistant. Users sign themselves. Not investment advice. Unavailable in the United States and restricted regions.",
     tags: ["bstocks", "pancakeswap", "automation"],
   });
   console.log("Prepared mint (not yet sent):", {

@@ -49,7 +49,7 @@ export function loadEnv() {
     pollMs: Math.max(5000, Number(process.env.A2A_POLL_INTERVAL_MS ?? "5000")),
     intentTtlMs: Number(process.env.INTENT_TTL_MS ?? "180000"),
     agentId: process.env.TERMIX_AGENT_ID ?? "",
-    agentHandle: process.env.TERMIX_AGENT_HANDLE ?? "bstocks-yield",
+    agentHandle: process.env.TERMIX_AGENT_HANDLE ?? "bStocks",
     ...llm,
   };
 }

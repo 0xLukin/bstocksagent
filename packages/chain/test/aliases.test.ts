@@ -33,6 +33,6 @@ describe("token aliases", () => {
     const prompt = formatWhitelistForPrompt();
     expect(prompt).toContain("NVDAB");
     expect(prompt).toContain("英伟达");
-    expect(prompt).toMatch(/没有 AAPL/);
+    expect(prompt).toMatch(/no AAPL/);
   });
 });

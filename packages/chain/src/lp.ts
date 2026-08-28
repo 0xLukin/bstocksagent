@@ -65,7 +65,7 @@ function sortTokens(a: TokenRecord, b: TokenRecord): [TokenRecord, TokenRecord] 
 
 export function assertPositionOwner(owner: string, user: string): void {
   if (getAddress(owner) !== getAddress(user)) {
-    throw new Error("这个 LP NFT 不属于绑定钱包，已拒绝。");
+    throw new Error("This LP NFT is not owned by the bound wallet.");
   }
 }
 
@@ -110,11 +110,11 @@ export type AnalyzeLpResult = {
 
 function pairWarnings(liquidity: bigint): string[] {
   const warnings = [
-    "LP 有无常损失（IL）。区间越窄，费率收益越高，但更容易脱区间。",
-    "非美股交易时段，链上价格可能相对正股偏离。",
-    "bStocks 是证书类敞口，不是直接持股，无投票权。不承诺年化收益。",
+    "LP can incur impermanent loss. Tighter ranges earn more fees but exit range more easily.",
+    "Off US-market hours, on-chain price may deviate from the underlying.",
+    "bStocks are certificate-style exposure, not direct equity, and have no voting rights. No APR is promised.",
   ];
-  if (liquidity === 0n) warnings.push("当前池子 liquidity 为 0，请勿加仓。");
+  if (liquidity === 0n) warnings.push("Pool liquidity is 0. Do not add.");
   return warnings;
 }
 
@@ -438,7 +438,7 @@ async function planPairAmounts(args: {
     ? (await uiDisplayToRaw(args.client, args.quote, args.amountQuoteUi)).raw
     : 0n;
   if (tokenRaw <= 0n && quoteRaw <= 0n) {
-    throw new Error("加池需要证书数量、稳定币数量或总预算（例如 100 USDT）。");
+    throw new Error("Mint needs a share amount, stable amount, or total budget (e.g. 100 USDT).");
   }
   const amount0Desired = args.token0.symbol === args.token.symbol ? tokenRaw : quoteRaw;
   const amount1Desired = args.token1.symbol === args.token.symbol ? tokenRaw : quoteRaw;
@@ -462,7 +462,7 @@ async function planBudgetAmounts(args: {
   ticks: { tickLower: number; tickUpper: number };
 }): Promise<{ amount0: bigint; amount1: bigint; liquidity: bigint }> {
   const budget = parseUiNumber(args.budgetQuoteUi);
-  if (!(budget > 0)) throw new Error("加池预算必须大于 0");
+  if (!(budget > 0)) throw new Error("LP budget must be greater than 0");
   const half = (budget / 2).toFixed(8);
   const seed = await planPairAmounts({
     ...args,
@@ -483,9 +483,9 @@ async function planBudgetAmounts(args: {
     usdPerGas,
   });
   if (needGasUsd && !(usdPerGas && usdPerGas > 0)) {
-    throw new Error("无法把 WBNB 池按美元预算拆仓，请改口给出证书数量或改用 USDT 池。");
+    throw new Error("Cannot size a WBNB pool from a USD budget. Give a share amount or use a USDT pool.");
   }
-  if (!(mark > 0)) throw new Error("无法按预算估算仓位，请改口给出证书数量。");
+  if (!(mark > 0)) throw new Error("Cannot size the position from budget. Give a share amount instead.");
   const scale = BigInt(Math.max(1, Math.round((budget / mark) * 1_000_000)));
   return planLiquidityAmounts({
     sqrtPriceX96: args.sqrtPriceX96,
@@ -543,7 +543,7 @@ function lpMintSummary(args: {
 export async function buildMintLpTxs(args: BuildMintArgs): Promise<MintPlan> {
   if (args.slippageBps <= 0) throw new Error("slippageBps must be > 0 (amountMin != 0)");
   if (!args.amountTokenUi && !args.amountQuoteUi && !args.budgetQuoteUi) {
-    throw new Error("加池需要证书数量、稳定币数量或总预算");
+    throw new Error("Mint needs a share amount, stable amount, or total budget");
   }
   const client = args.client ?? getPublicClient();
   const token = getToken(args.token);
@@ -568,7 +568,7 @@ export async function buildMintLpTxs(args: BuildMintArgs): Promise<MintPlan> {
     ticks,
   });
   if (planned.liquidity <= 0n || (planned.amount0 <= 0n && planned.amount1 <= 0n)) {
-    throw new Error("算不出有效仓位数量。请同时给证书和稳定币数量，或换更宽的区间。");
+    throw new Error("Could not compute a valid position size. Give both share and stable amounts, or use a wider range.");
   }
 
   const amount0Desired = planned.amount0;
@@ -693,7 +693,7 @@ export async function buildIncreaseLpTxs(args: {
   });
   const amount0Min = planned.amount0 > 0n ? applySlippage(planned.amount0, args.slippageBps, "minOut") : 0n;
   const amount1Min = planned.amount1 > 0n ? applySlippage(planned.amount1, args.slippageBps, "minOut") : 0n;
-  if (planned.liquidity <= 0n) throw new Error("加仓数量无效");
+  if (planned.liquidity <= 0n) throw new Error("Increase size is invalid");
   const deadline = BigInt(Math.floor(Date.now() / 1000) + args.deadlineSeconds);
   const pancake = pancakeFromConfig();
   const txs: PreparedTx[] = [];
@@ -760,9 +760,9 @@ export async function buildDecreaseLpTxs(args: {
   const snap = await snapshotPosition(args.tokenId, client);
   assertPositionOwner(snap.owner, args.userAddress);
   const liquidity = BigInt(snap.liquidity);
-  if (liquidity <= 0n) throw new Error("这个仓位没有流动性可撤。");
+  if (liquidity <= 0n) throw new Error("This position has no liquidity to withdraw.");
   const take = (liquidity * BigInt(args.decreaseBps)) / 10_000n;
-  if (take <= 0n) throw new Error("撤出份额过小。");
+  if (take <= 0n) throw new Error("Withdraw share is too small.");
   const used = getAmountsForLiquidity(
     (await readPoolState(snap.pool, client)).sqrtPriceX96,
     getSqrtRatioAtTick(snap.tickLower),

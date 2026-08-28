@@ -37,17 +37,17 @@ const PAIR = new RegExp(
 );
 const PRICE = new RegExp(`(?:价格|price)\\s+(${TOK})(?:\\s*/\\s*(${TOK}))?`, "i");
 const PRICE_LOOSE = new RegExp(
-  `(?:查看|查一下|看看|查下)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:的)?(?:报价|价格|行情)`,
+  `(?:查看|查一下|看看|查下|check|show)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:的)?(?:报价|价格|行情|\\s+(?:price|quote))`,
   "i",
 );
 const LP = new RegExp(
-  `(?:加lp|加池|analyze[_\\s-]?lp|分析)\\s+(${TOK})(?:\\s+([\\d.]+))?(?:\\s+([\\d.]+))?`,
+  `(?:加lp|加池|analyze[_\\s-]?lp|分析|add\\s*lp)\\s+(${TOK})(?:\\s+([\\d.]+))?(?:\\s+([\\d.]+))?`,
   "i",
 );
-const COLLECT = /^(?:收(?:取)?(?:手续)?费|harvest|collect)(?:\s*#?\s*(\d+))?$/i;
-const POSITIONS = /^(?:我的)?(?:仓位|持仓|positions?)$/i;
-const DECREASE_FULL = /^(全撤|撤出全部|全部撤出|撤出)$/;
-const DECREASE_HALF = /^(撤一半|减仓一半|撤 50%)$/;
+const COLLECT = /^(?:收(?:取)?(?:手续)?费|harvest|collect(?:\s+fees?)?)(?:\s*#?\s*(\d+))?$/i;
+const POSITIONS = /^(?:我的)?(?:仓位|持仓|positions?|my positions?)$/i;
+const DECREASE_FULL = /^(全撤|撤出全部|全部撤出|撤出|withdraw all|exit all|close (?:the )?lp)$/i;
+const DECREASE_HALF = /^(撤一半|减仓一半|撤 50%|withdraw half|exit half)$/i;
 
 function spokenQuoteAsset(raw: string): string {
   const key = raw.toLowerCase();
@@ -58,6 +58,25 @@ function spokenQuoteAsset(raw: string): string {
 
 export function parseBuySell(text: string): PendingQuote | null {
   const t = text.trim();
+  const enBuy = t.match(
+    new RegExp(`(?:buy|purchase)\\s+(\\d+(?:\\.\\d+)?)\\s*(usdt|usd|wbnb|bnb|u)\\s*(?:of|worth of)?\\s*(${TOK})`, "i"),
+  );
+  if (enBuy) {
+    return { tokenIn: spokenQuoteAsset(enBuy[2]!), tokenOut: enBuy[3]!, amountInUi: enBuy[1]! };
+  }
+  const enSell = t.match(
+    new RegExp(
+      `(?:sell)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:of\\s+)?([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s+(?:for|to)\\s+(u|usdt|usd|wbnb|bnb))?\\s*$`,
+      "i",
+    ),
+  );
+  if (enSell) {
+    return {
+      tokenIn: enSell[2]!,
+      tokenOut: enSell[3] ? spokenQuoteAsset(enSell[3]) : "USDT",
+      amountInUi: enSell[1]!,
+    };
+  }
   const spend = t.match(
     new RegExp(
       `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd|wbnb|bnb)\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
@@ -131,31 +150,36 @@ export function parseSpokenFee(text: string): number | undefined {
 export function parseSpokenQuote(text: string): string | undefined {
   if (/\bwbnb\b/i.test(text)) return "WBNB";
   if (/\busdc\b/i.test(text)) return "USDC";
-  if (/(?:usdt\s*(?:池|档|那个)|那个\s*usdt)/i.test(text)) return "USDT";
-  if (/\bbnb\b/i.test(text) && /(?:池|档|那个|lp)/i.test(text)) return "WBNB";
+  if (/(?:usdt\s*(?:池|档|那个|pool|tier)|那个\s*usdt|\busdt\s+pool)/i.test(text)) return "USDT";
+  if (/\bbnb\b/i.test(text) && /(?:池|档|那个|lp|pool|tier)/i.test(text)) return "WBNB";
   return undefined;
 }
 
 export function parseCompareLp(text: string): { token: string } | null {
   const t = text.trim();
-  if (/加/.test(t) && /\d/.test(t)) return null;
-  if (!/(apr|年化|收益|哪个lp|哪[个個]池|池子怎么样|lp怎么样|流动性池|最高.*lp|lp.*最高)/i.test(t)) {
+  if (/(?:加|add)\b/i.test(t) && /\d/.test(t)) return null;
+  if (
+    !/(apr|年化|收益|哪个lp|哪[个個]池|池子怎么样|lp怎么样|流动性池|最高.*lp|lp.*最高|highest\s+apr|best\s+apr|which\s+pool|lp\s+apr)/i.test(
+      t,
+    )
+  ) {
     return null;
   }
-  const cleaned = t.replace(/^(?:查看|查一下|看看|查下)\s*/i, "");
+  const cleaned = t.replace(/^(?:查看|查一下|看看|查下|check|show|what(?:'s| is))\s*/i, "");
   const parts = cleaned.split(
-    /(?:的)?(?:目前|当前|哪个|哪個|最高|apr|年化|收益|lp|池子?|流动性|怎么样)/i,
+    /(?:的)?(?:目前|当前|哪个|哪個|最高|apr|年化|收益|lp|池子?|流动性|怎么样|highest|best|yield)/i,
   );
   const token = (parts[0] || "").trim();
-  if (!token || /最高|哪个|哪個|怎样|如何/.test(token)) return null;
+  if (!token || /最高|哪个|哪個|怎样|如何|highest|best/.test(token)) return null;
   return { token };
 }
 
-const FIAT = "u|usdt|usd|刀|美金|美元|块";
-const BEST_POOL = "最高apr|apr最高|年化最高|最高那个|那个最高|最高的|最好的|最好那个|最好的那个";
+const FIAT = "u|usdt|usd|dollars?|刀|美金|美元|块";
+const BEST_POOL =
+  "最高apr|apr最高|年化最高|最高那个|那个最高|最高的|最好的|最好那个|最好的那个|highest(?:\\s+apr)?|best(?:\\s+(?:one|pool))?";
 
 function parseLpPick(text: string): "highest" | "thickest" | undefined {
-  if (/(最厚|tvl\s*最高|流动性最大)/i.test(text)) return "thickest";
+  if (/(最厚|tvl\s*最高|流动性最大|thickest|highest\s+tvl|deepest)/i.test(text)) return "thickest";
   if (new RegExp(BEST_POOL, "i").test(text)) return "highest";
   return undefined;
 }
@@ -166,7 +190,7 @@ function stripLpSuffix(token: string): string {
 
 function cleanLpToken(raw: string): string {
   const token = stripLpSuffix(raw).replace(/[吧吗呢啊呀]+$/u, "").trim();
-  if (!token || /最高|最好|那个|哪個|怎样|如何|池子/.test(token)) return "";
+  if (!token || /最高|最好|那个|哪個|怎样|如何|池子|highest|best|that|pool/.test(token)) return "";
   return token;
 }
 
@@ -184,6 +208,27 @@ export function parseAddLp(text: string): ParsedAddLp | null {
       ...(pick ? { pick } : {}),
     };
   };
+  const enBudgetHighest = t.match(
+    new RegExp(
+      `(?:add|put)\\s+(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:to|into|in)?\\s*(?:the\\s+)?(?:${BEST_POOL})`,
+      "i",
+    ),
+  );
+  if (enBudgetHighest) {
+    const tok = t.match(new RegExp(`(?:of|for)?\\s*(${TOK})(?:\\s+(?:lp|pool))?\\s*$`, "i"));
+    return {
+      token: tok?.[1] ? cleanLpToken(tok[1]) : "",
+      budgetQuoteUi: enBudgetHighest[1]!,
+      pick: "highest",
+      ...extras(),
+    };
+  }
+  const enBudgetToken = t.match(
+    new RegExp(`(?:add|put)\\s+(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:of|to|into)?\\s*(${TOK})`, "i"),
+  );
+  if (enBudgetToken) {
+    return { token: cleanLpToken(enBudgetToken[3]!), budgetQuoteUi: enBudgetToken[1]!, ...extras() };
+  }
   const budgetHighest = t.match(
     new RegExp(
       `(?:帮我|请|想要?)?加\\s*(\\d+(?:\\.\\d+)?)\\s*(${FIAT})\\s*(?:的|到)?(?:那个)?(?:${BEST_POOL})`,
@@ -234,7 +279,7 @@ function recoverBudgetUi(ctx: ToolCtx): string | undefined {
   for (const turn of turns.slice(0, 8)) {
     if (turn.role !== "user") continue;
     const m = turn.content.match(new RegExp(`(\\d+(?:\\.\\d+)?)\\s*(?:${FIAT})\\b`, "i"));
-    if (m && /加|lp|池/i.test(turn.content)) return m[1];
+    if (m && /加|add|lp|池/i.test(turn.content)) return m[1];
   }
   return undefined;
 }
@@ -282,14 +327,14 @@ function formatAnalyzeLp(raw: string): string {
     };
     if (!a.pool || a.midQuotePerToken == null) return raw;
     const tvl = Number(a.tvlUsdApprox);
-    const tvlText = Number.isFinite(tvl) ? `约 $${Math.round(tvl).toLocaleString("en-US")}` : String(a.tvlUsdApprox);
+    const tvlText = Number.isFinite(tvl) ? `~$${Math.round(tvl).toLocaleString("en-US")}` : String(a.tvlUsdApprox);
     const fee = a.fee != null ? `${(a.fee / 10_000).toFixed(2)}%` : "";
     const lo = a.priceLower != null ? Number(a.priceLower).toFixed(4) : "";
     const hi = a.priceUpper != null ? Number(a.priceUpper).toFixed(4) : "";
     const range = a.suggestedRangeBps != null ? `±${(a.suggestedRangeBps / 100).toFixed(0)}%` : "";
     return [
-      `${a.token0}/${a.token1} · fee ${fee} · 中间价约 ${a.midQuotePerToken} ${a.token1}/${a.token0}`,
-      `池 TVL ${tvlText}${range ? ` · 建议区间 ${range}` : ""}${lo && hi ? `：${lo}–${hi}` : ""}`,
+      `${a.token0}/${a.token1} · fee ${fee} · mid ~ ${a.midQuotePerToken} ${a.token1}/${a.token0}`,
+      `Pool TVL ${tvlText}${range ? ` · suggested range ${range}` : ""}${lo && hi ? `: ${lo}–${hi}` : ""}`,
       ...(a.warnings ?? []),
     ].join("\n");
   } catch {
@@ -349,24 +394,24 @@ export function formatToolReply(raw: string): string {
       };
     };
     if (data.error === "risk_blocked") {
-      return ["风控未通过，没有生成签名页。", ...(data.blockers ?? [])].join("\n");
+      return ["Risk check failed. No signer page was created.", ...(data.blockers ?? [])].join("\n");
     }
     if (data.error === "insufficient_balance") {
-      return data.message ?? "余额不足。";
+      return data.message ?? "Insufficient balance.";
     }
     if (data.kind === "lp-compare" && Array.isArray(data.pools)) {
       if (!data.pools.length) {
-        return "白名单报价资产下没有可用的 Pancake V3 池（只看 USDT/USDC/WBNB）。";
+        return "No whitelist Pancake V3 pools for this token (USDT/USDC/WBNB only).";
       }
       const lines = data.pools.map((p) => {
-        const flag = p.thin ? " · 薄，数字仅供参考" : "";
-        return `${p.quote} ${p.feeLabel} · 费率年化 ${p.apr24hPct.toFixed(1)}% · TVL $${Math.round(p.tvlUsd).toLocaleString("en-US")} · 24h $${Math.round(p.volumeUsd24h).toLocaleString("en-US")}${flag}`;
+        const flag = p.thin ? " · thin, numbers are informational only" : "";
+        return `${p.quote} ${p.feeLabel} · fee APR ${p.apr24hPct.toFixed(1)}% · TVL $${Math.round(p.tvlUsd).toLocaleString("en-US")} · 24h $${Math.round(p.volumeUsd24h).toLocaleString("en-US")}${flag}`;
       });
       const top = data.highestApr
-        ? `非薄池最高：${data.highestApr.quote} ${data.highestApr.feeLabel}，约 ${data.highestApr.apr24hPct.toFixed(1)}%（近 24h 手续费年化）。`
-        : "没有达到流动性门槛的池，不能按最高 APR 下单。";
+        ? `Highest non-thin: ${data.highestApr.quote} ${data.highestApr.feeLabel}, about ${data.highestApr.apr24hPct.toFixed(1)}% (24h fee APR).`
+        : "No pool clears the liquidity floor, so highest-APR mint is blocked.";
       const thick = data.thickest
-        ? `TVL 最厚：${data.thickest.quote} ${data.thickest.feeLabel}，约 $${Math.round(data.thickest.tvlUsd).toLocaleString("en-US")}。`
+        ? `Thickest TVL: ${data.thickest.quote} ${data.thickest.feeLabel}, about $${Math.round(data.thickest.tvlUsd).toLocaleString("en-US")}.`
         : "";
       return [
         top,
@@ -374,7 +419,8 @@ export function formatToolReply(raw: string): string {
         "",
         ...lines,
         "",
-        data.disclaimer ?? "不是收益承诺。要加某一档请说：加 100u 那个最高的 / 加 100u 英伟达 WBNB 0.25%。",
+        data.disclaimer ??
+          "Not a yield promise. To mint a tier: add 100u to the highest / add 100u NVIDIA WBNB 0.25%.",
       ]
         .filter((x) => x !== "")
         .join("\n");
@@ -382,41 +428,41 @@ export function formatToolReply(raw: string): string {
     if (data.display && data.uiPrice) {
       return [
         data.display,
-        "这是池内中间价（1 股值多少报价资产），不是投资建议。",
-        "要下单请说金额，例如：用 100 USDT 买英伟达。",
+        "This is the pool mid (how much quote asset 1 share is worth), not investment advice.",
+        "To trade, state an amount, e.g. buy 100 USDT of NVIDIA / 用 100 USDT 买英伟达.",
       ].join("\n");
     }
     if (Array.isArray(data.positions)) {
       if (!data.positions.length) {
-        return "绑定钱包下没有白名单 bStock 的 V3 仓位。可以说「加LP NVDAB 0.01」开一个（默认 ±30%）。";
+        return "No whitelist bStock V3 positions on the bound wallet. Say addLP NVDAB 0.01 to open one (default ±30%).";
       }
       const lines = data.positions.map((p) => {
-        const range = p.inRange ? "区间内" : "已脱区间，不再吃手续费";
+        const range = p.inRange ? "in range" : "out of range, no longer earning fees";
         return [
           `#${p.tokenId} ${p.token0}/${p.token1} ${(p.fee / 10000).toFixed(2)}% · ${range}`,
-          `敞口 ${p.amount0Ui} ${p.token0} + ${p.amount1Ui} ${p.token1} · 标记约 $${p.markUsd}`,
-          `未收约 $${p.feesUsdApprox} · 区间 ${p.priceLower}–${p.priceUpper}`,
+          `Exposure ${p.amount0Ui} ${p.token0} + ${p.amount1Ui} ${p.token1} · mark ~$${p.markUsd}`,
+          `Uncollected ~$${p.feesUsdApprox} · range ${p.priceLower}–${p.priceUpper}`,
         ].join("\n");
       });
       return [
-        `仓位 ${data.count ?? data.positions.length} 条（不是收益承诺）：`,
+        `${data.count ?? data.positions.length} position(s) (not a yield promise):`,
         ...lines,
-        "收割说「收手续费」，退出说「全撤」或「撤一半」，再回复「确认」。",
+        "Collect with collect / 收手续费. Exit with withdraw all / 全撤 or withdraw half / 撤一半, then confirm.",
       ].join("\n\n");
     }
     if (data.signerUrl) {
       const s = data.summary ?? {};
       const pair =
         s.tokenIn && s.tokenOut
-          ? `${s.amountInUi ?? ""} ${s.tokenIn} → 约 ${s.amountOutUi ?? "?"} ${s.tokenOut}`
+          ? `${s.amountInUi ?? ""} ${s.tokenIn} → ~${s.amountOutUi ?? "?"} ${s.tokenOut}`
           : s.token0 && s.token1
             ? `${s.amount0Ui ?? ""} ${s.token0} + ${s.amount1Ui ?? ""} ${s.token1}${s.rangeLabel ? ` · ${s.rangeLabel}` : ""}${s.rangePrices ? ` · ${s.rangePrices}` : ""}${s.tokenId ? ` · #${s.tokenId}` : ""}`
             : "";
       return [
-        "已按你上一笔确认的方案生成待签意图（不是投资建议）。",
+        "Signer intent created from the last confirmed plan (not investment advice).",
         pair.trim(),
-        `签名页：${data.signerUrl}`,
-        "请用绑定钱包核对地址、数量和 raw 后再签名。不想做了回「取消」，或在签名页点「取消这笔」。",
+        `Signer: ${data.signerUrl}`,
+        "Use the bound wallet. Check address, amounts, and raw before signing. To stop, say cancel / 取消, or tap Cancel on the signer page.",
       ]
         .filter(Boolean)
         .join("\n");
@@ -438,7 +484,7 @@ export function cancelPendingTrade(ctx: ToolCtx): string {
       ctx.intents.cancel(intentId);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!/已经广播完成/.test(msg)) throw err;
+      if (!/Already broadcast/.test(msg)) throw err;
       return msg;
     }
   }
@@ -447,11 +493,11 @@ export function cancelPendingTrade(ctx: ToolCtx): string {
   delete ctx.conversation.lastQuote;
   delete ctx.conversation.lastLp;
   ctx.conversation.lastIntent = next.lastIntent;
-  if (!had) return "当前没有待执行的报价或签名页。";
+  if (!had) return "There is no pending quote or signer page.";
   return [
-    "已取消。没有广播任何交易，币还在你钱包里。",
-    "如果刚才只签过授权、没签兑换，钱包里可能仍有一笔有界授权，可自行撤销。",
-    "再说一次标的和金额就能重新报价。",
+    "Cancelled. Nothing was broadcast; tokens stay in your wallet.",
+    "If you only signed the approve, a bounded allowance may still sit on-chain — you can revoke it yourself.",
+    "Restate the token and amount to requote.",
   ].join("\n");
 }
 
@@ -512,7 +558,7 @@ async function resolveLpPool(
   cmd: Extract<LocalCmd, { kind: "lp" }>,
 ): Promise<{ token: string; quote: string; fee: number; feeLabel: string; aprLabel: string }> {
   const token = cmd.token || ctx.conversation.lastLpCompare?.token || ctx.conversation.lastLp?.token;
-  if (!token) throw new Error("请先说标的，例如：英伟达最高 apr，或 加 100u 英伟达。");
+  if (!token) throw new Error("Name a token first, e.g. NVIDIA highest apr, or add 100u NVIDIA.");
   const wantsNamedPool = Boolean(cmd.pick || cmd.quote || cmd.fee != null);
   if (!wantsNamedPool) {
     return {
@@ -520,16 +566,16 @@ async function resolveLpPool(
       quote: "USDT",
       fee: 2500,
       feeLabel: "0.25%",
-      aprLabel: "未指定档位",
+      aprLabel: "unspecified tier",
     };
   }
   const cmp = await ensureLpCompare(ctx, token);
   const picked = pickComparedPool(cmp, { pick: cmd.pick, quote: cmd.quote, fee: cmd.fee });
   if (!picked) {
-    throw new Error(`找不到可加的白名单 V3 池（${token}${cmd.quote ? " / " + cmd.quote : ""}）。先说「${token}最高apr」看列表。`);
+    throw new Error(`No whitelist V3 pool to mint (${token}${cmd.quote ? " / " + cmd.quote : ""}). Ask "${token} highest apr" first.`);
   }
   if (picked.thin && cmd.pick === "highest") {
-    throw new Error("没有达到流动性门槛的池，不能按「最高 APR」下单。请指定 USDT 0.25% 等具体档位。");
+    throw new Error("No pool clears the liquidity floor, so highest-APR mint is blocked. Name a tier such as USDT 0.25%.");
   }
   return {
     token: picked.token,
@@ -546,13 +592,13 @@ async function pickPosition(ctx: ToolCtx, tokenId?: string) {
   };
   if (tokenId) {
     const hit = listed.positions.find((p) => p.tokenId === tokenId);
-    if (!hit) throw new Error(`找不到 NFT #${tokenId}，或不是这个钱包的白名单仓位。`);
+    if (!hit) throw new Error(`NFT #${tokenId} not found, or it is not a whitelist position of this wallet.`);
     return hit;
   }
   if (listed.positions.length === 1) return listed.positions[0]!;
-  if (!listed.positions.length) throw new Error("没有可操作的仓位。");
+  if (!listed.positions.length) throw new Error("No positions to manage.");
   throw new Error(
-    `有 ${listed.positions.length} 个仓位，请写明编号，例如：收手续费 ${listed.positions[0]!.tokenId}`,
+    `${listed.positions.length} positions found. Specify the id, e.g. collect ${listed.positions[0]!.tokenId}`,
   );
 }
 
@@ -576,16 +622,16 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
     const pos = await pickPosition(ctx, cmd.tokenId);
     rememberLp(ctx, { token: pos.token0, collectTokenId: pos.tokenId });
     return [
-      `将收取 NFT #${pos.tokenId}（${pos.token0}/${pos.token1}）的手续费，本金不动。`,
-      "核对后回复「确认执行」。",
+      `Will collect fees from NFT #${pos.tokenId} (${pos.token0}/${pos.token1}). Principal stays.`,
+      "Reply confirm / 确认执行 after you check.",
     ].join("\n");
   }
 
   if (cmd.kind === "decrease") {
     const pos = await pickPosition(ctx);
     rememberLp(ctx, { token: pos.token0, decreaseTokenId: pos.tokenId, decreaseBps: cmd.fractionBps });
-    const label = cmd.fractionBps >= 10_000 ? "全部撤出（并烧掉 NFT）" : "撤出一半流动性";
-    return [`将${label}：NFT #${pos.tokenId}（${pos.token0}/${pos.token1}）。`, "核对后回复「确认执行」。"].join("\n");
+    const label = cmd.fractionBps >= 10_000 ? "withdraw all (and burn the NFT)" : "withdraw half the liquidity";
+    return [`Will ${label}: NFT #${pos.tokenId} (${pos.token0}/${pos.token1}).`, "Reply confirm / 确认执行 after you check."].join("\n");
   }
 
   if (cmd.kind === "quote") {
@@ -602,7 +648,7 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
     return [
       quoted,
       "",
-      "这是只读报价，不构成投资建议。核对 raw / UI 后回复「确认执行」才会生成签名页链接。",
+      "Read-only quote, not investment advice. Reply confirm / 确认执行 after checking raw vs UI to get a signer link.",
     ].join("\n");
   }
 
@@ -634,22 +680,22 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
       ),
     );
     if (!hasMintSize(cmd)) {
-      return [analysis, "", "若要加池，发送：加LP NVDAB 0.01 或 帮我加100u的英伟达lp，再回复「确认执行」。默认区间 ±30%。"].join("\n");
+      return [analysis, "", "To mint, send addLP NVDAB 0.01 or add 100u NVIDIA lp, then confirm. Default range ±30%."].join("\n");
     }
     const size = cmd.budgetQuoteUi
-      ? `总预算约 ${cmd.budgetQuoteUi} u（按区间公式拆成证书+${selected.quote}，不是对半）`
+      ? `Budget ~ ${cmd.budgetQuoteUi} u (split by the range formula into certificate + ${selected.quote}, not 50/50)`
       : [cmd.amountTokenUi && `${cmd.amountTokenUi} ${cmd.token}`, cmd.amountQuoteUi && `${cmd.amountQuoteUi} ${selected.quote}`]
           .filter(Boolean)
           .join(" + ");
     const pool = `${selected.quote} ${selected.feeLabel}`;
     const apr =
-      selected.aprLabel === "未指定档位"
-        ? "不是收益承诺。"
-        : `近 24h 费率年化约 ${selected.aprLabel}，不是承诺。`;
+      selected.aprLabel === "unspecified tier"
+        ? "Not a yield promise."
+        : `About ${selected.aprLabel} 24h fee APR, not a promise.`;
     return [
       analysis,
       "",
-      `已记下加池：${size} · ${pool}，默认区间 ±30%。回复「确认执行」才会生成签名页。${apr}`,
+      `Noted LP mint: ${size} · ${pool}, default range ±30%. Reply confirm / 确认执行 to get a signer page. ${apr}`,
     ].join("\n");
   }
 
@@ -661,7 +707,7 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
         ? { type: "swap" as const, ...ctx.conversation.lastQuote }
         : null;
   if (!pending) {
-    return "还没有待确认的报价。先发送：报价 USDT→NVDAB 10 或 加LP NVDAB 0.01 或 我的仓位";
+    return "No pending quote. Try: quote USDT→NVDAB 10, addLP NVDAB 0.01, or my positions.";
   }
   if (pending.type === "swap") {
     return runTool(

@@ -67,7 +67,7 @@ export function createApp(
       return c.json({ ok: true, intent });
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err);
-      const status = text.includes("已经广播") ? 409 : text.includes("not found") ? 404 : 400;
+      const status = text.includes("Already broadcast") ? 409 : text.includes("not found") ? 404 : 400;
       return c.json({ error: text }, status);
     }
   });

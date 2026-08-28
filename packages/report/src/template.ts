@@ -27,13 +27,13 @@ export function buildDeliveryReport(input: Omit<DeliveryReport, "generatedAt" | 
     intents: input.intents ?? [],
     notes: input.notes,
     riskDisclaimer: [
-      "本报告及对话内容不构成投资建议、招揽或推荐。",
-      "bStocks 是证书类敞口，不是直接持股，持有人无投票权。",
-      "美国及受限地区用户不得使用本服务。",
-      "PancakeSwap V3 LP 存在无常损失；非交易时段价格可能相对正股偏离。",
-      "链上 raw 数量与 UI 股数可能因 ERC-8056 uiMultiplier（拆股/分红复投）不一致。合约一律使用 raw。",
-      "所有 DeFi 交易由用户自己的钱包签名广播；Agent 钱包只处理 Termix 托管佣金。",
-      "Termix 没有自动结算 worker。交付后若买家不 accept，需在挑战窗口结束后调用 claimAfterTimeout。",
+      "This report and the conversation are not investment advice, solicitation, or a recommendation.",
+      "bStocks are certificate-style exposure, not direct equity, and holders have no voting rights.",
+      "Users in the United States and restricted regions may not use this service.",
+      "PancakeSwap V3 LP can incur impermanent loss. Off-hours prices may deviate from the underlying.",
+      "On-chain raw amounts can differ from UI shares because of ERC-8056 uiMultiplier (splits / dividend reinvestment). Contracts always use raw.",
+      "All DeFi trades are signed and broadcast by the user's wallet. The agent wallet only handles Termix escrow fees.",
+      "Termix has no auto-settle worker. After delivery, if the buyer does not accept, call claimAfterTimeout after the challenge window.",
     ],
   };
 }
@@ -46,32 +46,32 @@ export function renderMarkdown(report: DeliveryReport): string {
   const notes = report.notes.map((n) => `- ${n}`).join("\n");
   return `# ${report.title}
 
-生成时间：${report.generatedAt}
+Generated: ${report.generatedAt}
 
-- 用户地址：\`${report.userAddress ?? "—"}\`
-- 订单：\`${report.orderId ?? "—"}\`
+- User: \`${report.userAddress ?? "—"}\`
+- Order: \`${report.orderId ?? "—"}\`
 
-## 交易哈希
+## Transaction hashes
 
-${txs || "- （无）"}
+${txs || "- (none)"}
 
-## 仓位快照
+## Position snapshot
 
 \`\`\`json
 ${JSON.stringify(report.positions, null, 2)}
 \`\`\`
 
-## 签名页意图记录
+## Signer intent log
 
 \`\`\`json
 ${JSON.stringify(report.intents, null, 2)}
 \`\`\`
 
-## 说明
+## Notes
 
-${notes || "- （无）"}
+${notes || "- (none)"}
 
-## 风险声明
+## Risk disclosure
 
 ${risks}
 `;

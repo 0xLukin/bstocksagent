@@ -178,7 +178,7 @@ export async function buildSwapTxs(args: BuildSwapArgs): Promise<{
       const now = Math.floor(Date.now() / 1000);
       if (leftover.amount >= quote.amountInRaw && leftover.expiration > now) {
         notes.push(
-          "Permit2 上已有对 Smart Router 的额度，但 0x13f4 Smart Router 仍走 ERC20 transferFrom，继续有界 approve Router。",
+          "Permit2 already has a Smart Router allowance, but 0x13f4 still uses ERC20 transferFrom. Keep a bounded Router approve.",
         );
       }
     } catch {
@@ -208,7 +208,7 @@ export async function buildSwapTxs(args: BuildSwapArgs): Promise<{
         functionName: "multicall",
         args: [deadline, encodeRouterCalls(quote, args.recipient, amountOutMin, false)],
       });
-      notes.push("Smart Router 未吃 msg.value，改为先 wrap 成 WBNB 再兑。");
+      notes.push("Smart Router did not consume msg.value. Wrap to WBNB first, then swap.");
     }
   }
 
@@ -218,7 +218,7 @@ export async function buildSwapTxs(args: BuildSwapArgs): Promise<{
       to: quote.tokenIn.address,
       data: encodeFunctionData({ abi: wbnbAbi, functionName: "deposit" }),
       value: quote.amountInRaw,
-      label: "wrap 原生 BNB → WBNB",
+      label: "wrap native BNB → WBNB",
     });
   }
 

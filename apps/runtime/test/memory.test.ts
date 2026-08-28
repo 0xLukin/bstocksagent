@@ -62,7 +62,7 @@ describe("Termix conversation memory", () => {
     store.clearPending("local");
     const card = formatRuntimeState(store.get("local"));
     expect(card).toContain("https://signer.example/t/intent-1");
-    expect(card).toMatch(/不要当成第一次来|记忆卡/);
+    expect(card).toMatch(/memory card|Do not treat the user as new/);
   });
 
   it("clears the pending quote when the user cancels", () => {
@@ -81,7 +81,7 @@ describe("Termix conversation memory", () => {
     expect(next.lastQuote).toBeUndefined();
     expect(next.userConfirmed).toBe(false);
     expect(next.lastIntent?.cancelled).toBe(true);
-    expect(formatRuntimeState(next)).toMatch(/已取消/);
+    expect(formatRuntimeState(next)).toMatch(/cancelled/i);
   });
 
   it("appends transcript turns for the next LLM call", () => {

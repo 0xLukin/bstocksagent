@@ -240,59 +240,59 @@ export function formatRuntimeState(state: ConversationState): string {
       : undefined,
   };
   const lines = [
-    "这是本 Termix 对话的记忆卡（按 conversationId 持久化）。Termix inbox 每条只有新消息，没有历史；以下槽位和最近对话才是上下文。不要把用户当成第一次来。",
-    `当前对话状态：${JSON.stringify(snap)}`,
+    "This is the Termix conversation memory card (persisted by conversationId). Inbox sends only the new message, no history. These slots plus recent turns are the context. Do not treat the user as new.",
+    `Conversation state: ${JSON.stringify(snap)}`,
   ];
   if (state.lastQuote) {
     const q = state.lastQuote;
     lines.push(
-      `待执行兑换：${q.amountInUi} ${q.tokenIn} → ${q.tokenOut}。用户说「确认」后必须立即 create_swap_intent（用这组参数），禁止再问买还是卖、禁止再要金额。`,
+      `Pending swap: ${q.amountInUi} ${q.tokenIn} → ${q.tokenOut}. On confirm, call create_swap_intent with these params immediately. Do not re-ask buy vs sell or the amount.`,
     );
   } else if (state.lastLp?.collectTokenId) {
     lines.push(
-      `待收取手续费：NFT #${state.lastLp.collectTokenId}。用户说「确认」后必须立即 create_lp_intent（collectTokenId），禁止再问操作类型。`,
+      `Pending fee collect: NFT #${state.lastLp.collectTokenId}. On confirm, call create_lp_intent (collectTokenId) immediately. Do not re-ask the action type.`,
     );
   } else if (state.lastLp?.decreaseTokenId) {
     lines.push(
-      `待撤出仓位：NFT #${state.lastLp.decreaseTokenId} ${state.lastLp.decreaseBps ?? 10000} bps。用户说「确认」后必须立即 create_lp_intent。`,
+      `Pending withdraw: NFT #${state.lastLp.decreaseTokenId} ${state.lastLp.decreaseBps ?? 10000} bps. On confirm, call create_lp_intent immediately.`,
     );
   } else if (state.lastLp?.increaseTokenId && state.lastLp.amountTokenUi) {
     lines.push(
-      `待加仓：NFT #${state.lastLp.increaseTokenId} + ${state.lastLp.amountTokenUi} ${state.lastLp.token}。用户说「确认」后必须立即 create_lp_intent。`,
+      `Pending increase: NFT #${state.lastLp.increaseTokenId} + ${state.lastLp.amountTokenUi} ${state.lastLp.token}. On confirm, call create_lp_intent immediately.`,
     );
   } else if (state.lastLp?.amountTokenUi || state.lastLp?.amountQuoteUi || state.lastLp?.budgetQuoteUi) {
     const lp = state.lastLp;
     const size = lp.budgetQuoteUi
-      ? `预算约 ${lp.budgetQuoteUi} USDT`
-      : [lp.amountTokenUi && `${lp.amountTokenUi} ${lp.token}`, lp.amountQuoteUi && `${lp.amountQuoteUi} USDT`]
+      ? `budget ~ ${lp.budgetQuoteUi} ${lp.quote ?? "quote"}`
+      : [lp.amountTokenUi && `${lp.amountTokenUi} ${lp.token}`, lp.amountQuoteUi && `${lp.amountQuoteUi} ${lp.quote ?? "quote"}`]
           .filter(Boolean)
           .join(" + ");
     const pool = [lp.quote, lp.fee != null ? `fee ${lp.fee}` : undefined].filter(Boolean).join(" ");
     lines.push(
-      `待执行加池：${size}${pool ? ` · ${pool}` : ""}。用户说「确认」后必须立即 create_lp_intent（用记忆卡 lastLp 的 token/quote/fee），禁止再问操作类型、禁止改回默认 USDT 2500。`,
+      `Pending LP mint: ${size}${pool ? ` · ${pool}` : ""}. On confirm, call create_lp_intent with lastLp token/quote/fee. Do not re-ask the action type. Do not revert to the default USDT 2500 pool.`,
     );
   } else if (state.lastLpCompare) {
     const top = state.lastLpCompare.highestApr;
     lines.push(
-      `已查过 ${state.lastLpCompare.token} 的 V3 池费率年化。用户指定某一档（最高 / WBNB / 0.25%）并给出金额后，必须按该 quote+fee 写入 lastLp 再 create_lp_intent。${
-        top ? `当前非薄池最高约 ${top.apr24hPct.toFixed(1)}%（${top.quote} ${top.feeLabel}）。` : ""
-      }不要承诺收益。`,
+      `Already compared ${state.lastLpCompare.token} V3 fee APR. After the user picks a tier (highest / WBNB / 0.25%) and an amount, write that quote+fee into lastLp then create_lp_intent.${
+        top ? ` Current non-thin highest is about ${top.apr24hPct.toFixed(1)}% (${top.quote} ${top.feeLabel}).` : ""
+      } Do not promise yield.`,
     );
   } else {
     lines.push(
-      "当前没有待执行报价。用户只说「确认」且无待执行报价时，请对方用一句话重述标的和金额，不要展开成问卷。用户说「取消」时不要再追问。",
+      "No pending quote. If the user only says confirm with nothing pending, ask them to restate the token and amount in one sentence. Do not turn it into a questionnaire. On cancel, do not keep asking.",
     );
   }
   if (state.lastIntent?.cancelled) {
-    lines.push("上一笔签名页已取消，不要再发那个链接。");
+    lines.push("The last signer page was cancelled. Do not send that link again.");
   } else if (state.lastIntent?.signerUrl) {
-    lines.push(`最近已生成的签名页（用户问「链接呢」就直接给）：${state.lastIntent.signerUrl}`);
+    lines.push(`Most recent signer page (if they ask for the link, give this): ${state.lastIntent.signerUrl}`);
   }
   if (state.wallet) {
-    lines.push(`买家钱包已记录 ${state.wallet}，不要再向他要一遍 0x，除非他要换地址。`);
+    lines.push(`Buyer wallet is already ${state.wallet}. Do not ask for 0x again unless they want to change it.`);
   }
   if (state.geoConfirmed) {
-    lines.push("地理声明已完成，不要再要求重复声明。");
+    lines.push("Geo declaration is done. Do not ask again.");
   }
   return lines.join("\n");
 }

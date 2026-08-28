@@ -1,75 +1,75 @@
 # bstocks-yield-agent
 
-BNB Chain 上的非托管 Agent：用口语买卖白名单 [bStocks](https://bstocks.com/)，并在 PancakeSwap **仅 V3** 加、管流动性。跑在 [Termix](https://docs.termix.ai/) 上，买家自己的钱包签名，Agent 碰不到私钥。
+A non-custodial BNB Chain agent: buy and sell whitelist [bStocks](https://bstocks.com/) in plain language, and add or manage PancakeSwap **V3-only** liquidity. It runs on [Termix](https://docs.termix.ai/). Buyers sign with their own wallet. The agent never holds that key.
 
-对话用简体中文。链上 symbol 是 `NVDAB` / `MSFTB` 这种「代码 + B」；说「英伟达」「NVDA」「微软」会映射到同一条白名单记录。
+Product copy and the signer page are English. The LLM replies in the user's language: Chinese if they write Chinese, English otherwise. Spoken names such as NVIDIA / 英伟达 / NVDA all map to the same whitelist row (`NVDAB`).
 
-> 不是投资顾问，不承诺收益或年化。bStocks 是证书类敞口，不是正股，无投票权。美国及受限地区不可用。
+> Not investment advice. No yield or APR is promised. bStocks are certificate-style exposure, not the underlying stock, and have no voting rights. Unavailable in the United States and restricted regions.
 
-## 能做什么
+## What it does
 
-- **查价 / 兑换**：`用 100 USDT 买英伟达`、`用 0.05 BNB 买 NVDAB`、`卖 0.5 英伟达`。原生 BNB 和 WBNB 分开，不会互相顶替。
-- **对比 LP 年化**：`英伟达最高 apr`。走 Pancake Explorer 的 BSC V3 池，只列对端为 USDT / USDC / WBNB 的白名单池，并标出薄池。数字是近 24h **手续费年化**，不是你的仓位收益，也不是承诺。
-- **加池**：默认 `NVDAB / USDT 0.25%`、区间 ±30%。也可以指定档位：`加 100u 那个最高的`、`加 100u 英伟达 WBNB 0.25%`。确认后按同一组 quote + fee 出意图，不会改回默认池。
-- **管仓位**：`我的仓位`、`收手续费`、`撤一半`、`全撤`。先列 NFT，再等确认。
-- **取消**：`取消` / `不要了` 只取消未广播的报价和签名页，不会取消 Termix 雇佣单，也撤不掉已经上链的成交。
+- **Quote / swap**: `buy 100 USDT of NVIDIA`, `buy NVDAB with 0.05 BNB`, `sell 0.5 NVIDIA`. Native BNB and WBNB stay separate.
+- **Compare LP APR**: `NVIDIA highest apr`. Pancake Explorer BSC V3 only, quote assets USDT / USDC / WBNB, thin pools flagged. The number is 24h **fee APR**, not your position return, and not a promise.
+- **Mint LP**: default `NVDAB / USDT 0.25%`, range ±30%. Or pick a tier: `add 100u to the highest`, `add 100u NVIDIA WBNB 0.25%`. Confirm uses the same quote + fee.
+- **Manage positions**: `my positions`, `collect`, `withdraw half`, `withdraw all`. List NFTs first, then wait for confirm.
+- **Cancel**: `cancel` / 取消 only drops the pending quote and unsigned signer page. It does not cancel a Termix hire or an already-broadcast fill.
 
-默认滑点 50 bps（上限 80 bps）。单笔名义规模、池流动性、价格偏离见 `config/risk.json`。
+Default slippage is 50 bps (cap 80 bps). Notional, pool liquidity, and deviation limits live in `config/risk.json`.
 
-## 买家怎么走
+## Buyer path
 
-1. 声明不在美国及受限地区。
-2. 给出 BSC 钱包（`0x…`），或由 Termix inbox 带上。
-3. 用一句话说标的和金额（或先问哪个池年化高）。
-4. 核对报价 / 池档 / 风险后回复 **确认执行**。
-5. 打开签名页，用**绑定的那只钱包**核对地址、数量、raw 后再签。
+1. Confirm you are not in the United States or a restricted region.
+2. Send a BSC wallet (`0x…`), or let the Termix inbox attach it.
+3. State the token and amount in one sentence (or ask which pool has the higher APR).
+4. Check the quote / pool / risks, then reply **confirm**.
+5. Open the signer page with the **bound wallet**. Check address, amounts, and raw before signing.
 
-签名页会先 `eth_call` 模拟并估算 gas；硬失败不能确认。授权是有界 approve，`amountMin` 不得为 0，deadline 很短。
+The signer page runs `eth_call` and estimates gas first. A hard fail blocks confirm. Approves are bounded, `amountMin` must not be 0, and the deadline is short.
 
-本地不经过 Termix 也可以走完同一条路径：
+The same path works locally without Termix:
 
 ```bash
-pnpm dev:runtime    # :8787  意图 + /chat
-pnpm dev:signer     # :3000  签名页
-pnpm chat           # 终端里对话，conversation=local
+pnpm dev:runtime    # :8787  intents + /chat
+pnpm dev:signer     # :3000  signer page
+pnpm chat           # terminal chat, conversation=local
 ```
 
-例句：`我确认不在美国及受限地区` → 粘贴 `0x` → `英伟达最高 apr` → `加 100刀到最好的那个池子` → `确认执行`。
+Examples: `I confirm I am not in the United States or a restricted region` → paste `0x` → `NVIDIA highest apr` → `add 100u to the best pool` → `confirm`.
 
-没配 `DEEPSEEK_API_KEY` 时，规则例句（报价 / 加池 / 仓位 / 确认）仍然可用。配了 key 之后走 DeepSeek 工具调用，默认 `deepseek-v4-flash`。
+Without `DEEPSEEK_API_KEY`, the rule phrases (quote / mint / positions / confirm) still work. With a key, DeepSeek drives tool calls (`deepseek-v4-flash` by default).
 
-## 两套钱，不要混
+## Two money flows
 
-| | 谁签名 | 干什么 |
+| | Who signs | What it does |
 | --- | --- | --- |
-| Termix 托管 | Agent 钱包 `WALLET_KEY` | 接单、交交付物、超时 `claimAfterTimeout` |
-| 用户 DeFi | 用户自己的钱包（签名页） | approve / swap / mint / collect / decrease |
+| Termix escrow | Agent wallet `WALLET_KEY` | Accept, deliver, `claimAfterTimeout` |
+| User DeFi | User wallet (signer page) | approve / swap / mint / collect / decrease |
 
-Agent **没有**用户私钥，也不替用户发主网交易。合约调用只用 ERC-8056 **raw**；对话和报告用 UI 股数。
+The agent **does not** have the user key and does not broadcast user DeFi txs. Contracts use ERC-8056 **raw**; chat and reports use UI shares.
 
-收款只走 Termix 托管。不接 BNB Agent Studio，不接 x402。只做 BSC（chainId 56）和 Pancake V3，不做 V2 / Venus / Lista。
+Settlement is Termix escrow in **USDC** (platform default). No BNB Agent Studio, no x402. BSC (chainId 56) and Pancake V3 only. No V2 / Venus / Lista.
 
-## 白名单
+## Whitelist
 
-代币和池在 `config/tokens.json`、`config/pools.json`，不在代码里写死地址。2026-08-26 用链上 `symbol()` 核对过。
+Tokens and pools live in `config/tokens.json` and `config/pools.json`, not hardcoded. On-chain `symbol()` was checked on 2026-08-26.
 
-bStocks：NVDAB、TSLAB、CRCLB、MUB、SNDKB、SPCXB、AMDB、EWYB、INTCB、MSTRB、LITEB、METAB、MSFTB、PLTRB、QQQB。  
-报价资产：USDT、USDC、WBNB（口语里的 BNB 是原生 gas）。
+bStocks: NVDAB, TSLAB, CRCLB, MUB, SNDKB, SPCXB, AMDB, EWYB, INTCB, MSTRB, LITEB, METAB, MSFTB, PLTRB, QQQB.  
+Quote assets: USDT, USDC, WBNB (spoken BNB is native gas).
 
-报价会在 `preferredFee` + `feeTiers` 里比 `amountOut`，必要时两跳走 `USDT → USDC → WBNB`。未写进 `pools.json` 的 V3 池（例如 NVDAB/WBNB）运行时用 Factory `getPool` 解析。
+Quotes compare `amountOut` across `preferredFee` + `feeTiers`, then two-hop via `USDT → USDC → WBNB` if needed. V3 pools not listed in `pools.json` (e.g. NVDAB/WBNB) are resolved at runtime with Factory `getPool`.
 
-## 风险（对话、Listing、交付物都会重复）
+## Risks (repeated in chat, listing, and delivery)
 
-- 不构成投资建议，不承诺年化。
-- 美国及受限地区禁止；未地理确认不出交易意图。
-- LP 有无常损失；区间越窄越容易脱区间、不再吃手续费。
-- 非美股交易时段，链上价格可能相对正股偏离。
-- 薄池的 APR 数字仅供参考，不能当「最高」去 mint。
-- 用户最终自己签名、自己承担结果。
+- Not investment advice. No APR is promised.
+- US and restricted regions are blocked. No trade intent without a geo confirm.
+- LP has impermanent loss. Tighter ranges exit range more easily and stop earning fees.
+- Off US-market hours, on-chain price may deviate from the underlying.
+- Thin-pool APR is informational only and cannot be minted as “highest”.
+- The user signs and bears the outcome.
 
-## 本地开发
+## Local development
 
-需要 Node 20+、pnpm 10+、稳定的 BSC RPC（公共节点只适合本地）。
+Node 20+, pnpm 10+, and a stable BSC RPC (public nodes are fine locally).
 
 ```bash
 corepack enable
@@ -79,69 +79,70 @@ pnpm typecheck
 pnpm test
 ```
 
-只读报价 / 生成 calldata（默认不广播）：
+Read-only quote / calldata (no broadcast by default):
 
 ```bash
 pnpm quote -- --in USDT --out NVDAB --amount 10
-pnpm swap-intent -- --in USDT --out NVDAB --amount 10 --user 0x你的地址
-pnpm lp-intent -- --token NVDAB --amount 0.01 --user 0x你的地址
+pnpm swap-intent -- --in USDT --out NVDAB --amount 10 --user 0xYourAddress
+pnpm lp-intent -- --token NVDAB --amount 0.01 --user 0xYourAddress
 ```
 
-生产签名页：https://signer-web-phi.vercel.app  
-Runtime 发给买家的链接前缀是 `SIGNER_WEB_URL`。意图数据仍由 Runtime 提供；HTTPS 签名页回不了 `http://127.0.0.1`，所以生产要把 `NEXT_PUBLIC_RUNTIME_URL` 指到公网 Runtime。
+Production signer: https://signer-web-phi.vercel.app  
+Links sent to buyers use `SIGNER_WEB_URL`. Intent data still comes from Runtime. An HTTPS signer cannot call `http://127.0.0.1`, so set `NEXT_PUBLIC_RUNTIME_URL` to a public Runtime in production.
 
-### 对话记忆
+### Conversation memory
 
-Termix inbox **每次只推买家的新一句**，没有会话回放。Runtime 按 `conversationId` 自己记：
+Termix inbox sends **only the buyer’s new sentence**. Runtime persists by `conversationId`:
 
-1. 记忆卡：地理声明、钱包、待执行报价 / 加池档位、最近签名页、`orderId`
-2. 最近 24 轮 transcript
-3. inbox 游标 + `messageId` 幂等；同一 `orderId` 的新线程会继承钱包和地理声明
+1. Memory card: geo, wallet, pending quote / LP tier, last signer page, `orderId`
+2. Last 24 turns
+3. Inbox cursor + `messageId` idempotency; a new thread with the same `orderId` inherits wallet and geo
 
-数据在仓库根目录 `.data/`（不要用 `apps/runtime/.data`）。本地 `/chat` 默认 `conversationId=local`。
+Data lives at the repo root `.data/` (not `apps/runtime/.data`). Local `/chat` defaults to `conversationId=local`.
 
-### 环境变量
+### Environment
 
-完整列表见 `.env.example`。密钥只放 `.env`，不要提交。
+See `.env.example`. Secrets stay in `.env` and are not committed.
 
-| 变量 | 用途 |
+| Variable | Use |
 | --- | --- |
 | `BSC_RPC_URL` | BSC JSON-RPC |
-| `WALLET_KEY` | **仅** Termix 侧 Agent 钱包。本地报价 / 签名页不需要 |
-| `DEEPSEEK_API_KEY` | 自然语言工具调用 |
-| `A2A_LLM_MODEL` | 默认 `deepseek-v4-flash` |
-| `TERMIX_AGENT_ID` | 铸造成功后填入；未设置时 A2A 轮询空转 |
-| `SIGNER_WEB_URL` | 发给买家的签名页前缀 |
-| `NEXT_PUBLIC_RUNTIME_URL` | 签名页回读意图 |
+| `WALLET_KEY` | Termix agent wallet **only**. Local quotes / signer do not need it |
+| `DEEPSEEK_API_KEY` | Natural-language tool calls |
+| `A2A_LLM_MODEL` | Default `deepseek-v4-flash` |
+| `TERMIX_AGENT_ID` | Set after mint; A2A poller idles without it |
+| `SIGNER_WEB_URL` | Signer-page prefix sent to buyers |
+| `NEXT_PUBLIC_RUNTIME_URL` | Signer reads intents from here |
+| `LISTING_CURRENCY` | Termix listing/offer currency, default `USDC` |
 
-Termix 合约地址启动时从 `GET /api/v1/config/contracts` 拉取，代码里不写死。
+Termix contract addresses are fetched from `GET /api/v1/config/contracts` at startup.
 
-## Termix 上线
+## Termix go-live
 
-仓库不会自动铸造 NFT 或发布 Listing。脚本默认 dry-run，显式 `--broadcast` / `--publish` 且配置了 `WALLET_KEY` 才会上链。
+The repo does not mint or publish by itself. Scripts are dry-run unless you pass `--broadcast` / `--publish` with `WALLET_KEY` set.
 
 ```bash
-pnpm termix:mint                 # handle: bstocks-yield（只能设一次）
-pnpm termix:listing              # instantBuyable=false, deliveryDays=3, USDT
+pnpm termix:mint                 # handle: bStocks → bStocks.agent (set once)
+pnpm termix:listing              # instantBuyable=false, deliveryDays=3, USDC 0.5
 pnpm termix:accept -- <orderId>
 pnpm termix:deliver -- <orderId> ./path/report.md
 pnpm termix:claim-watch
 ```
 
-Listing 类别：Automation & Ops。Termix 铸的 NFT 就是 BSC 官方 Identity Registry 上的身份。
+Listing category: Automation & Ops. The Termix NFT is the identity on the official BSC Identity Registry.
 
-Termix **没有**自动结算。订单 `DELIVERED` 且挑战窗口结束后，要有人调用 `claimAfterTimeout`，否则佣金一直停在托管里。Runtime 内置看门狗，也可单独跑 `pnpm termix:claim-watch`。
+Termix has **no** auto-settle. After `DELIVERED` and the challenge window, someone must call `claimAfterTimeout` or the fee stays in escrow. Runtime has a watchdog; you can also run `pnpm termix:claim-watch`.
 
-## 仓库结构
+## Layout
 
-| 路径 | 职责 |
+| Path | Role |
 | --- | --- |
-| `apps/runtime` | A2A 轮询、LLM 工具、意图 HTTP、订单看门狗、本地 `/chat` |
-| `apps/signer-web` | Next.js + wagmi，`/t/:intentId`，仅 BSC；模拟 + 估 gas |
-| `packages/chain` | 白名单、ERC-8056、V3 报价 / 兑换 / LP、Explorer 年化对比 |
+| `apps/runtime` | A2A poll, LLM tools, intent HTTP, order watchdog, local `/chat` |
+| `apps/signer-web` | Next.js + wagmi, `/t/:intentId`, BSC only; simulate + gas |
+| `packages/chain` | Whitelist, ERC-8056, V3 quote / swap / LP, Explorer APR compare |
 | `packages/termix` | AACP REST |
-| `packages/risk` | 白名单、滑点、规模、流动性、偏离、地理门闩 |
-| `packages/report` | 交付 Markdown / JSON |
-| `config/*.json` | 代币、池、风控 |
+| `packages/risk` | Whitelist, slippage, size, liquidity, deviation, geo latch |
+| `packages/report` | Delivery Markdown / JSON |
+| `config/*.json` | Tokens, pools, risk |
 
-未做主网替用户代发成交。报价依赖公共 RPC，偶发超时属正常。
+The agent does not broadcast user fills on mainnet. Quotes use public RPC; occasional timeouts are expected.

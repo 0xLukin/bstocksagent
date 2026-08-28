@@ -57,7 +57,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
   useEffect(() => {
     if (!intent || intent.cancelledAt) return;
     if (!publicClient) {
-      setSim({ status: "warn", notes: [], error: "尚未连上 BSC RPC，无法模拟。请自行核对钱包弹窗。" });
+      setSim({ status: "warn", notes: [], error: "BSC RPC is not connected, so simulation is skipped. Check the wallet popup yourself." });
       return;
     }
     const from = address && boundOk ? address : intent.userAddress;
@@ -72,7 +72,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
           setSim({
             status: "warn",
             notes: [],
-            error: `无法模拟：${e.message}`,
+            error: `Could not simulate: ${e.message}`,
           });
         }
       });
@@ -84,7 +84,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
   async function onSign() {
     if (!intent || !address) return;
     if (!boundOk) {
-      setError("请切换到绑定钱包后再签。");
+      setError("Switch to the bound wallet before signing.");
       return;
     }
     if (chainId !== 56) {
@@ -128,7 +128,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
     return <div className="card danger">{error}</div>;
   }
   if (!intent || !view || !ttl) {
-    return <div className="card muted">正在读取这笔意图…</div>;
+    return <div className="card muted">Loading this intent…</div>;
   }
 
   const cancelled = Boolean(intent.cancelledAt);
@@ -152,15 +152,15 @@ export function SignerClient({ intentId }: { intentId: string }) {
     <div className="sheet">
       <div className="sheet-head">
         <div>
-          <h1>{cancelled ? "已取消" : view.title}</h1>
-          <p className="muted tight">{cancelled ? "不会再广播" : ttl.text}</p>
+          <h1>{cancelled ? "Cancelled" : view.title}</h1>
+          <p className="muted tight">{cancelled ? "Will not broadcast" : ttl.text}</p>
         </div>
         <span className="chip">BNB Chain</span>
       </div>
 
-      <div className="exchange" aria-label="付出与得到">
+      <div className="exchange" aria-label="You pay and you receive">
         <div className="leg">
-          <div className="leg-kicker">付出</div>
+          <div className="leg-kicker">You pay</div>
           <div className="amt">{view.payAmount}</div>
           <div className="sym">{view.paySymbol}</div>
           {view.payName && view.payName !== view.paySymbol && <div className="hint">{view.payName}</div>}
@@ -169,7 +169,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
           →
         </div>
         <div className="leg">
-          <div className="leg-kicker">得到</div>
+          <div className="leg-kicker">You receive</div>
           <div className="amt get">{view.getAmount}</div>
           <div className="sym">{view.getSymbol}</div>
           {view.getName && view.getName !== view.getSymbol && <div className="hint">{view.getName}</div>}
@@ -181,79 +181,79 @@ export function SignerClient({ intentId }: { intentId: string }) {
         <p className="guard">
           {view.minGet && (
             <>
-              最少到手 <strong>{view.minGet} {view.getSymbol}</strong>
+              Min out <strong>{view.minGet} {view.getSymbol}</strong>
             </>
           )}
           {view.minGet && view.slippage && " · "}
-          {view.slippage && <>滑点 {view.slippage}</>}
+          {view.slippage && <>Slippage {view.slippage}</>}
         </p>
       )}
 
-      <p className="footnote">{view.footnote} 不构成投资建议。</p>
+      <p className="footnote">{view.footnote} Not investment advice.</p>
 
-      {sim.status === "running" && <p className="guard">正在模拟交易并估算 gas…</p>}
+      {sim.status === "running" && <p className="guard">Simulating and estimating gas…</p>}
       {sim.status === "ok" && sim.gasBnb && (
         <p className="guard">
-          模拟通过 · 预估矿工费约 <strong>{Number(sim.gasBnb).toPrecision(4)} BNB</strong>
+          Simulation passed · estimated miner fee ~ <strong>{Number(sim.gasBnb).toPrecision(4)} BNB</strong>
         </p>
       )}
       {sim.status === "warn" && (
-        <p className="banner warn">{sim.error ?? "模拟不完整，请自行核对钱包弹窗。"}</p>
+        <p className="banner warn">{sim.error ?? "Simulation is incomplete. Check the wallet popup yourself."}</p>
       )}
-      {sim.status === "fail" && <p className="banner danger">{sim.error ?? "模拟失败，已禁止确认。"}</p>}
+      {sim.status === "fail" && <p className="banner danger">{sim.error ?? "Simulation failed. Confirm is blocked."}</p>}
 
       <div className="wallet-row">
         <div>
-          <div className="leg-kicker">钱包</div>
+          <div className="leg-kicker">Wallet</div>
           <div className="wallet-addr">
-            {isConnected && address ? shortAddr(address) : "未连接"}
+            {isConnected && address ? shortAddr(address) : "Not connected"}
           </div>
-          <div className="hint">须为 {shortAddr(intent.userAddress)}</div>
+          <div className="hint">Must be {shortAddr(intent.userAddress)}</div>
         </div>
         {isConnected ? (
           <button type="button" className="ghost" onClick={() => disconnect()}>
-            断开
+            Disconnect
           </button>
         ) : (
           <button type="button" className="ghost" disabled={isPending} onClick={connectWallet}>
-            {isPending ? "连接中…" : "连接钱包"}
+            {isPending ? "Connecting…" : "Connect wallet"}
           </button>
         )}
       </div>
 
-      {wrongWallet && <p className="banner warn">连的不是绑定地址，无法签名。</p>}
+      {wrongWallet && <p className="banner warn">Connected wallet is not the bound address. Cannot sign.</p>}
       {wrongChain && (
         <p className="banner warn">
-          当前不是 BNB Chain。
+          This is not BNB Chain.
           <button type="button" className="linkish" onClick={() => switchChain({ chainId: 56 })}>
-            切换网络
+            Switch network
           </button>
         </p>
       )}
-      {cancelled && <p className="banner warn">这笔已取消，币还在你钱包里。回对话重新报价即可。</p>}
-      {ttl.expired && !cancelled && <p className="banner warn">意图已过期，回对话让 Agent 再报一次价。</p>}
+      {cancelled && <p className="banner warn">Cancelled. Tokens stay in your wallet. Go back to chat for a new quote.</p>}
+      {ttl.expired && !cancelled && <p className="banner warn">Intent expired. Ask the agent for a new quote.</p>}
       {error && <p className="banner danger">{error}</p>}
 
       {!cancelled && !fullyBroadcast && (
         <>
           {!isConnected ? (
             <button className="primary" disabled={isPending || ttl.expired} onClick={connectWallet}>
-              {isPending ? "等待钱包…" : "连接钱包后确认"}
+              {isPending ? "Waiting for wallet…" : "Connect wallet to confirm"}
             </button>
           ) : (
             <button className="primary" disabled={!canSign} onClick={() => void onSign()}>
-              {sending ? "等待钱包确认…" : sim.status === "running" ? "正在模拟…" : view.cta}
+              {sending ? "Waiting for wallet…" : sim.status === "running" ? "Simulating…" : view.cta}
             </button>
           )}
           <button className="ghost cancel" disabled={!canCancel || cancelling} onClick={() => void onCancel()}>
-            {cancelling ? "正在取消…" : "取消这笔"}
+            {cancelling ? "Cancelling…" : "Cancel this"}
           </button>
         </>
       )}
 
       {hashes.length > 0 && (
         <div className="success">
-          <div className="leg-kicker">已广播</div>
+          <div className="leg-kicker">Broadcast</div>
           {hashes.map((h) => (
             <a key={h} href={`https://bscscan.com/tx/${h}`} target="_blank" rel="noreferrer">
               {shortAddr(h)}
@@ -263,11 +263,11 @@ export function SignerClient({ intentId }: { intentId: string }) {
       )}
 
       <details className="advanced">
-        <summary>raw 数量</summary>
+        <summary>Raw amounts</summary>
         <dl className="kv">
           {typeof intent.summary.amountInRaw === "string" && (
             <>
-              <dt>付出 raw</dt>
+              <dt>Pay raw</dt>
               <dd>
                 <code>{intent.summary.amountInRaw}</code>
               </dd>
@@ -275,7 +275,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
           )}
           {typeof intent.summary.amountOutRaw === "string" && (
             <>
-              <dt>得到 raw</dt>
+              <dt>Receive raw</dt>
               <dd>
                 <code>{intent.summary.amountOutRaw}</code>
               </dd>
@@ -290,11 +290,11 @@ export function SignerClient({ intentId }: { intentId: string }) {
             </>
           )}
         </dl>
-        <p className="hint">链上只认 raw。上面的股数仅供阅读。</p>
+        <p className="hint">The chain only uses raw. The share amounts above are for reading.</p>
       </details>
 
       <details className="advanced">
-        <summary>将广播的交易（{intent.txs.length} 笔）</summary>
+        <summary>Transactions to broadcast ({intent.txs.length})</summary>
         <ol className="tx-list">
           {intent.txs.map((tx, i) => (
             <li key={i}>
@@ -302,7 +302,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
                 {i + 1}. {txTitle(tx.label)}
               </div>
               <div className="hint">
-                至 <code>{shortAddr(tx.to)}</code>
+                to <code>{shortAddr(tx.to)}</code>
               </div>
               <code className="calldata">{tx.data.slice(0, 22)}…</code>
             </li>
@@ -310,12 +310,12 @@ export function SignerClient({ intentId }: { intentId: string }) {
         </ol>
         <p className="hint">
           {sim.status === "ok"
-            ? "链上模拟通过。"
+            ? "On-chain simulation passed."
             : sim.status === "fail"
-              ? "链上模拟未通过。"
+              ? "On-chain simulation failed."
               : intent.simulation.ok
-                ? "Runtime 已做编码检查；本页会再模拟。"
-                : "编码检查未通过。"}
+                ? "Runtime encoded the calls; this page simulates again."
+                : "Encoding check failed."}
         </p>
         {sim.notes.length > 0 && (
           <ul className="risks">
@@ -328,7 +328,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
 
       {intent.risks.length > 0 && (
         <details className="advanced">
-          <summary>风险说明</summary>
+          <summary>Risk notes</summary>
           <ul className="risks">
             {intent.risks.map((r) => (
               <li key={r}>{r}</li>

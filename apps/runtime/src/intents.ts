@@ -22,16 +22,16 @@ export type StoredIntent = {
 
 export function assertIntentBinding(intent: StoredIntent, connected: string): void {
   if (!isAddress(connected)) {
-    throw new Error("连接的钱包地址无效");
+    throw new Error("Connected wallet address is invalid");
   }
   if (getAddress(connected) !== getAddress(intent.userAddress)) {
-    throw new Error("连接钱包与意图绑定地址不一致，已拒绝签名");
+    throw new Error("Connected wallet does not match the bound address");
   }
   if (intent.cancelledAt) {
-    throw new Error("这笔意图已取消，不会再签名");
+    throw new Error("This intent was cancelled and will not be signed");
   }
   if (Date.parse(intent.expiresAt) <= Date.now()) {
-    throw new Error("意图已过期，请让 Agent 重新生成");
+    throw new Error("Intent expired. Ask the agent for a new quote");
   }
 }
 
@@ -75,7 +75,7 @@ export class IntentStore {
       risks: input.risks,
       simulation: input.simulation ?? {
         ok: true,
-        notes: input.simulationNotes ?? ["本地编码完成；签名页将再模拟。"],
+        notes: input.simulationNotes ?? ["Encoded locally; the signer page will simulate again."],
       },
       txHashes: [],
     };
@@ -93,7 +93,7 @@ export class IntentStore {
     const intent = this.get(id);
     if (!intent) throw new Error("intent not found");
     if (intent.txs.length > 0 && intent.txHashes.length >= intent.txs.length) {
-      throw new Error("已经广播完成，无法取消链上成交。若要反向，请再说一笔卖出。");
+      throw new Error("Already broadcast. On-chain fills cannot be cancelled. To reverse, place a sell.");
     }
     if (!intent.cancelledAt) {
       intent.cancelledAt = new Date().toISOString();

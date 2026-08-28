@@ -83,7 +83,7 @@ export const TOOL_DEFS = [
     function: {
       name: "compare_lp_pools",
       description:
-        "List whitelist V3 pools for a bStock (USDT/USDC/WBNB) with Pancake Explorer 24h fee APR, TVL, and volume. Use for 最高apr / 哪个池收益高. Does not create an intent.",
+        "List whitelist V3 pools for a bStock (USDT/USDC/WBNB) with Pancake Explorer 24h fee APR, TVL, and volume. Use for highest APR / 最高apr. Does not create an intent.",
       parameters: {
         type: "object",
         properties: { token: { type: "string" } },
@@ -133,7 +133,7 @@ export const TOOL_DEFS = [
     function: {
       name: "create_swap_intent",
       description:
-        "Create a user-signed swap intent from the pending quote. Requires geo + explicit confirm. If lastQuote exists, call this immediately on 确认 — do not re-ask the pair or amount.",
+        "Create a user-signed swap intent from the pending quote. Requires geo + explicit confirm. If lastQuote exists, call this immediately on confirm / 确认 — do not re-ask the pair or amount.",
       parameters: {
         type: "object",
         properties: {
@@ -209,7 +209,7 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "send_termix_offer",
-      description: "Send a custom USDT offer in the current Termix conversation. Requires confirm.",
+      description: "Send a custom USDC offer in the current Termix conversation. Requires confirm.",
       parameters: {
         type: "object",
         properties: {
@@ -233,13 +233,13 @@ function rememberCreatedIntent(
 
 function gate(state: ConversationState) {
   if (!state.geoConfirmed) {
-    throw new Error("地理确认未完成：请用户声明不在美国及受限地区后再执行。");
+    throw new Error("Geo not confirmed. Ask the user to declare they are not in the US or a restricted region.");
   }
   if (!state.userConfirmed) {
-    throw new Error("用户尚未明确确认。请先展示方案，等用户回复「确认执行」。");
+    throw new Error("User has not confirmed. Show the plan, then wait for confirm / 确认执行.");
   }
   if (!state.wallet) {
-    throw new Error("尚未记录用户钱包地址。请用户发送 0x 地址。");
+    throw new Error("No user wallet yet. Ask for a 0x address.");
   }
 }
 
@@ -282,7 +282,7 @@ function signerOf(ctx: ToolCtx, intent: { id: string }) {
 async function intentSimulation(client: PublicClient, account: Address, txs: PreparedTx[]) {
   try {
     const sim = await simulatePreparedTxs(client, account, txs);
-    const gas = sim.gasFeeWei > 0n ? `预估矿工费约 ${formatEther(sim.gasFeeWei)} BNB` : undefined;
+    const gas = sim.gasFeeWei > 0n ? `Estimated miner fee ~ ${formatEther(sim.gasFeeWei)} BNB` : undefined;
     return {
       ok: !sim.hardFail,
       notes: [...sim.notes, gas].filter((x): x is string => Boolean(x)),
@@ -290,7 +290,7 @@ async function intentSimulation(client: PublicClient, account: Address, txs: Pre
   } catch (err) {
     return {
       ok: true,
-      notes: [`Runtime 模拟未完成：${err instanceof Error ? err.message : String(err)}。签名页将再模拟。`],
+      notes: [`Runtime simulation incomplete: ${err instanceof Error ? err.message : String(err)}. The signer page will simulate again.`],
     };
   }
 }
@@ -313,7 +313,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       requested: String(args.token),
       quote,
       uiPrice: q.amountOutUi,
-      display: `${token} ≈ ${q.amountOutUi} ${quote} / 股`,
+      display: `${token} ≈ ${q.amountOutUi} ${quote} / share`,
       rawOut: q.amountOutRaw.toString(),
       fee: q.fee,
       pool: q.pool,
@@ -342,7 +342,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       amountInRaw: q.amountInRaw.toString(),
       amountOutRaw: q.amountOutRaw.toString(),
       sqrtPriceX96After: q.sqrtPriceX96After?.toString(),
-      reminder: "以上 amount*Ui 仅供展示；链上使用 raw。查价请看 1 股值多少报价资产，不要用 1 USDT 买多少股当股价。",
+      reminder: "amount*Ui is display-only; the chain uses raw. Price is how much quote asset 1 share is worth, not how many shares 1 USDT buys.",
     });
   }
 
@@ -380,7 +380,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "list_positions") {
-    if (!ctx.conversation.wallet) throw new Error("尚未记录用户钱包地址。");
+    if (!ctx.conversation.wallet) throw new Error("No user wallet recorded yet.");
     const positions = await listPositions(ctx.conversation.wallet, client);
     return JSON.stringify({ wallet: ctx.conversation.wallet, count: positions.length, positions });
   }
@@ -416,7 +416,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       const symbol = nativeIn ? "BNB" : tokenIn.symbol;
       return JSON.stringify({
         error: "insufficient_balance",
-        message: `余额不足：钱包有 ${bal.uiDisplay} ${symbol}，这笔要 ${args.amountInUi}。`,
+        message: `Insufficient balance: wallet has ${bal.uiDisplay} ${symbol}, this trade needs ${args.amountInUi}.`,
       });
     }
     const built = await buildSwapTxs({
@@ -511,9 +511,9 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       risks: [
         ...verdict.warnings,
         ...built.notes,
-        ...(built.quote.tokenIn.scaledUi ? ["输入代币启用了 ERC-8056"] : []),
-        ...(built.quote.nativeIn ? ["付出的是钱包里的原生 BNB，不是 WBNB。"] : []),
-        ...(built.quote.nativeOut ? ["兑换结果会 unwrap 成原生 BNB。"] : []),
+        ...(built.quote.tokenIn.scaledUi ? ["Input token uses ERC-8056"] : []),
+        ...(built.quote.nativeIn ? ["You are spending native BNB from the wallet, not WBNB."] : []),
+        ...(built.quote.nativeOut ? ["The swap unwraps to native BNB."] : []),
       ],
       simulation: await intentSimulation(client, ctx.conversation.wallet!, built.txs),
     });
@@ -562,7 +562,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
           amount1Ui: pos.snapshot.tokensOwed1Ui,
           analysis: { token0: pos.token0.symbol, token1: pos.token1.symbol },
         },
-        risks: [...verdict.warnings, "收取手续费不会移除本金，但需用户自行签名。"],
+        risks: [...verdict.warnings, "Collecting fees does not remove principal, but the user must sign."],
         simulation: await intentSimulation(client, ctx.conversation.wallet!, [tx]),
       });
       consumePending(ctx);
@@ -606,7 +606,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (args.increaseTokenId) {
-      if (!args.amountTokenUi) throw new Error("加仓需要 amountTokenUi");
+      if (!args.amountTokenUi) throw new Error("Increase needs amountTokenUi");
       const built = await buildIncreaseLpTxs({
         userAddress: ctx.conversation.wallet!,
         tokenId: BigInt(String(args.increaseTokenId)),
@@ -643,7 +643,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (!args.amountTokenUi && !args.amountQuoteUi && !args.budgetQuoteUi) {
-      throw new Error("加池需要 amountTokenUi、amountQuoteUi 或 budgetQuoteUi");
+      throw new Error("Mint needs amountTokenUi, amountQuoteUi, or budgetQuoteUi");
     }
     const built = await buildMintLpTxs({
       userAddress: ctx.conversation.wallet!,
@@ -720,11 +720,11 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       .slice(-20)
       .map((i) => ({ id: i.id, kind: i.kind, cancelledAt: i.cancelledAt, txHashes: i.txHashes }));
     const report = buildDeliveryReport({
-      title: String(args.title ?? "bStocks / Pancake V3 交付报告"),
+      title: String(args.title ?? "bStocks / Pancake V3 delivery report"),
       userAddress: ctx.conversation.wallet,
       orderId: ctx.conversation.lastOrderId,
       txs: (args.txs ?? []) as Array<{ kind: string; hash: string; note?: string }>,
-      notes: (args.notes ?? ["由 Agent 根据本轮对话生成。"]) as string[],
+      notes: (args.notes ?? ["Generated by the agent from this conversation."]) as string[],
       positions,
       intents,
     });
@@ -737,12 +737,12 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   if (name === "send_termix_offer") {
     gate(ctx.conversation);
     if (!ctx.termix || !ctx.agentId) {
-      return JSON.stringify({ error: "termix_not_configured", hint: "设置 TERMIX_AGENT_ID 与 WALLET_KEY 后可发 offer。" });
+      return JSON.stringify({ error: "termix_not_configured", hint: "Set TERMIX_AGENT_ID and WALLET_KEY to send offers." });
     }
     const res = await sendConversationOffer(ctx.termix, ctx.conversation.id, {
       providerAgentId: ctx.agentId,
       price: String(args.price),
-      currency: "USDT",
+      currency: "USDC",
       deliveryDays: 3,
       scope: String(args.scope),
       message: args.message ? String(args.message) : undefined,

@@ -46,7 +46,7 @@ async function main() {
     sizeBytes: buf.length,
   });
   console.log("registered", art);
-  const intent = await submitDelivery(client, orderId, [art.id], "bStocks / Pancake V3 交付报告");
+  const intent = await submitDelivery(client, orderId, [art.id], "bStocks / Pancake V3 delivery report");
   console.log("submit intent", intent.action, intent.chainId);
   if (dry) {
     console.log("Dry run (upload skipped unless --broadcast). Pass --broadcast to send submitDelivery.");

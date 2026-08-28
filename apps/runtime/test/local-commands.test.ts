@@ -23,6 +23,7 @@ describe("parseLocalCommand", () => {
     expect(parseLocalCommand("确认执行")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("确定")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("我确认")).toEqual({ kind: "confirm" });
+    expect(parseLocalCommand("confirm")).toEqual({ kind: "confirm" });
   });
 
   it("parses spoken 100u NVIDIA LP as a pending mint", () => {
@@ -64,6 +65,15 @@ describe("parseLocalCommand", () => {
     });
     expect(parseLocalCommand("帮我加100u的英伟达lp").kind).toBe("lp");
     expect(parseLocalCommand("帮我加100u的英伟达lp")).not.toMatchObject({ pick: "highest" });
+    expect(parseAddLp("add 100u nvidia lp")).toEqual({
+      token: "nvidia",
+      budgetQuoteUi: "100",
+    });
+    expect(parseAddLp("add 100u to the best pool")).toMatchObject({
+      token: "",
+      budgetQuoteUi: "100",
+      pick: "highest",
+    });
     expect(parseAddLp("那帮我加100刀到最好的那个池子吧")).toEqual({
       token: "",
       budgetQuoteUi: "100",
@@ -82,10 +92,12 @@ describe("parseLocalCommand", () => {
     expect(parseLocalCommand("英伟达最高apr能到多少")).toEqual({ kind: "lp-compare", token: "英伟达" });
     expect(parseLocalCommand("spcx 池子怎么样")).toEqual({ kind: "lp-compare", token: "spcx" });
     expect(parseCompareLp("查看nvda的报价")).toBeNull();
+    expect(parseCompareLp("nvidia highest apr")).toEqual({ token: "nvidia" });
     expect(parseSpokenFee("WBNB 0.25%")).toBe(2500);
   });
 
   it("parses position management", () => {
+    expect(parseLocalCommand("my positions")).toEqual({ kind: "positions" });
     expect(parseLocalCommand("我的仓位")).toEqual({ kind: "positions" });
     expect(parseLocalCommand("收手续费")).toEqual({ kind: "collect" });
     expect(parseLocalCommand("收手续费 12345")).toEqual({ kind: "collect", tokenId: "12345" });
@@ -157,6 +169,16 @@ describe("parseLocalCommand", () => {
       tokenOut: "NVDAB",
       amountInUi: "0.05",
     });
+    expect(parseBuySell("buy 100 USDT of NVDAB")).toEqual({
+      tokenIn: "USDT",
+      tokenOut: "NVDAB",
+      amountInUi: "100",
+    });
+    expect(parseBuySell("sell 0.5 NVIDIA")).toEqual({
+      tokenIn: "NVIDIA",
+      tokenOut: "USDT",
+      amountInUi: "0.5",
+    });
   });
 
   it("tells the model to execute lastQuote instead of re-asking", () => {
@@ -169,7 +191,7 @@ describe("parseLocalCommand", () => {
       updatedAt: new Date().toISOString(),
     });
     expect(text).toContain("100 USDT → NVDAB");
-    expect(text).toMatch(/禁止再问/);
+    expect(text).toMatch(/Do not re-ask/);
   });
 
   it("tells the model a named APR pool is pending and must not revert to USDT 2500", () => {
@@ -183,7 +205,7 @@ describe("parseLocalCommand", () => {
     });
     expect(text).toContain("WBNB");
     expect(text).toContain("fee 2500");
-    expect(text).toMatch(/禁止改回默认 USDT 2500/);
+    expect(text).toMatch(/do not revert to the default USDT 2500/i);
   });
 
   it("tells the model a prior APR compare can be used to mint a named pool", () => {
@@ -211,7 +233,7 @@ describe("parseLocalCommand", () => {
       },
       updatedAt: new Date().toISOString(),
     });
-    expect(text).toContain("已查过 NVDAB");
+    expect(text).toContain("Already compared NVDAB");
     expect(text).toMatch(/WBNB 0\.25%/);
     expect(text).toMatch(/create_lp_intent/);
   });
@@ -221,7 +243,7 @@ describe("parseLocalCommand", () => {
       JSON.stringify({
         kind: "lp-compare",
         token: "NVDAB",
-        disclaimer: "不是收益承诺。",
+        disclaimer: "Not a yield promise.",
         highestApr: { quote: "WBNB", feeLabel: "0.25%", apr24hPct: 210, tvlUsd: 28000 },
         thickest: { quote: "USDT", feeLabel: "0.25%", tvlUsd: 1_600_000 },
         pools: [
@@ -230,10 +252,10 @@ describe("parseLocalCommand", () => {
         ],
       }),
     );
-    expect(text).toContain("非薄池最高：WBNB 0.25%");
+    expect(text).toContain("Highest non-thin: WBNB 0.25%");
     expect(text).toContain("190.0%");
-    expect(text).toContain("不是收益承诺");
-    expect(text).not.toMatch(/保证|稳赚/);
+    expect(text).toContain("Not a yield promise");
+    expect(text).not.toMatch(/guarantee|guaranteed|稳赚/);
   });
 
   it("tells the model a budget LP is pending", () => {
@@ -245,21 +267,21 @@ describe("parseLocalCommand", () => {
       lastLp: { token: "NVDAB", budgetQuoteUi: "100", rangeBps: 3000 },
       updatedAt: new Date().toISOString(),
     });
-    expect(text).toContain("预算约 100 USDT");
+    expect(text).toContain("budget ~ 100");
     expect(text).toMatch(/create_lp_intent/);
   });
 
   it("formats a 1-share mid price", () => {
     const text = formatToolReply(
       JSON.stringify({
-        display: "NVDAB ≈ 214.4 USDT / 股",
+        display: "NVDAB ≈ 214.4 USDT / share",
         uiPrice: "214.4",
         token: "NVDAB",
         quote: "USDT",
       }),
     );
-    expect(text).toContain("NVDAB ≈ 214.4 USDT / 股");
-    expect(text).toMatch(/1 股|中间价/);
+    expect(text).toContain("NVDAB ≈ 214.4 USDT / share");
+    expect(text).toMatch(/1 share|pool mid/i);
   });
 
   it("formats a signer URL instead of dumping JSON", () => {
@@ -270,7 +292,7 @@ describe("parseLocalCommand", () => {
       }),
     );
     expect(text).toContain("http://127.0.0.1:3000/t/abc");
-    expect(text).toContain("100 USDT → 约 0.46 NVDAB");
+    expect(text).toContain("100 USDT → ~0.46 NVDAB");
     expect(text).not.toMatch(/^\s*\{/);
   });
 });

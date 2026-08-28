@@ -3,13 +3,13 @@ import { Providers } from "./providers";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "bStocks 签名页",
-  description: "非托管：用你自己的钱包确认 BNB Chain 交易。页面不含 Agent 私钥。",
+  title: "bStocks signer",
+  description: "Non-custodial: confirm BNB Chain trades with your own wallet. This page never holds the agent key.",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="zh-CN">
+    <html lang="en">
       <body>
         <Providers>{children}</Providers>
       </body>

@@ -20,8 +20,8 @@ async function send(text: string) {
 }
 
 async function main() {
-  console.log(`本地 Termix 开发对话 → ${base}/chat  conversation=${conversationId}`);
-  console.log("例句：我确认不在美国及受限地区 / 0x你的地址 / 报价 USDT→NVDAB 10 / 确认执行");
+  console.log(`Local Termix chat → ${base}/chat  conversation=${conversationId}`);
+  console.log("Examples: I confirm I am not in the United States or a restricted region / 0x… / quote USDT→NVDAB 10 / confirm");
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     while (true) {

@@ -67,11 +67,16 @@ describe("confirmation latches", () => {
     expect(latchGeoConfirm(false, "我确认不在美国及受限地区")).toBe(true);
   });
 
+  it("latches an English non-US declaration", () => {
+    expect(latchGeoConfirm(false, "I confirm I am not in the United States or a restricted region")).toBe(true);
+  });
+
   it("does not latch a US residence claim", () => {
     expect(latchGeoConfirm(false, "我是美国居住")).toBe(false);
   });
 
   it("latches explicit user confirm", () => {
+    expect(latchUserConfirm(false, "confirm")).toBe(true);
     expect(latchUserConfirm(false, "确认执行")).toBe(true);
     expect(latchUserConfirm(false, "确定")).toBe(true);
     expect(latchUserConfirm(false, "我确认")).toBe(true);

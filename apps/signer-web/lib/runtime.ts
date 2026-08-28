@@ -25,15 +25,15 @@ export type RemoteIntent = {
 
 export async function fetchIntent(id: string): Promise<RemoteIntent> {
   const res = await fetch(`${RUNTIME}/intents/${id}`, { cache: "no-store" });
-  if (!res.ok) throw new Error("找不到该意图，或 Runtime 未启动");
+  if (!res.ok) throw new Error("Intent not found, or Runtime is not running");
   return (await res.json()) as RemoteIntent;
 }
 
 export async function cancelIntent(id: string): Promise<RemoteIntent> {
   const res = await fetch(`${RUNTIME}/intents/${id}/cancel`, { method: "POST" });
   const json = (await res.json()) as { intent?: RemoteIntent; error?: string };
-  if (!res.ok) throw new Error(json.error ?? "取消失败");
-  if (!json.intent) throw new Error("取消失败");
+  if (!res.ok) throw new Error(json.error ?? "Cancel failed");
+  if (!json.intent) throw new Error("Cancel failed");
   return json.intent;
 }
 
@@ -44,6 +44,6 @@ export async function reportTx(id: string, txHash: string, address: string) {
     body: JSON.stringify({ txHash, address }),
   });
   const json = await res.json();
-  if (!res.ok) throw new Error(json.error ?? "回传失败");
+  if (!res.ok) throw new Error(json.error ?? "Failed to report the transaction");
   return json;
 }

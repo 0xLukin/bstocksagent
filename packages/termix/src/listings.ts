@@ -1,26 +1,33 @@
 import type { TermixClient } from "./client.js";
 
-export const LISTING_DRAFT = {
-  title: "bStocks 交易 + PancakeSwap V3 加 LP（一次性）",
-  category: "Automation & Ops",
-  basePrice: process.env.LISTING_BASE_PRICE ?? "99",
-  currency: "USDT" as const,
-  deliveryDays: Number(process.env.LISTING_DELIVERY_DAYS ?? "3"),
-  description: [
-    "一次性服务：协助在 BNB Chain 上交易白名单 bStocks，并在 PancakeSwap V3 加/管理 LP。",
-    "非托管：用户用自己的钱包在签名页确认并广播交易，Agent 不持有用户私钥。",
-    "交付物：Markdown/JSON 报告、全部 txHash、签名页操作记录、风险声明。",
-    "合规：不构成投资建议；美国及受限地区不可用；bStocks 为证书类敞口，非直接持股。",
-  ].join("\n"),
-  skillTag: "bstocks-pancake-v3",
-  tags: ["bstocks", "pancakeswap", "lp", "bnb-chain"],
-  instantBuyable: false,
-  publicSearch: true,
-  proofMethod: "manual",
-  settlementType: "escrow",
-};
+/** Marketplace floor on live Termix is 0.5 (display units). Docs do not publish a smaller official min. */
+export function listingDraft() {
+  return {
+    title: "One-time bStocks trading + PancakeSwap V3 LP",
+    category: "Automation & Ops",
+    basePrice: process.env.LISTING_BASE_PRICE ?? "0.5",
+    currency: (process.env.LISTING_CURRENCY ?? "USDC") as "USDC" | "USDT",
+    deliveryDays: Number(process.env.LISTING_DELIVERY_DAYS ?? "3"),
+    description: [
+      "One-time help trading whitelist bStocks on BNB Chain and adding/managing PancakeSwap V3 LP.",
+      "Non-custodial: you confirm and broadcast from your own wallet on the signer page. The agent never holds your private key.",
+      "Deliverable: Markdown/JSON report, all tx hashes, signer-page log, and risk disclosures.",
+      "Not investment advice. Unavailable in the United States and restricted regions. bStocks are certificate-style exposure, not the underlying stock.",
+    ].join("\n"),
+    skillTag: "bstocks-pancake-v3",
+    tags: ["bstocks", "pancakeswap", "lp", "bnb-chain"],
+    instantBuyable: false,
+    publicSearch: true,
+    proofMethod: "manual",
+    settlementType: "escrow",
+  };
+}
 
-export async function createListing(client: TermixClient, agentId: string, draft = LISTING_DRAFT) {
+export async function createListing(
+  client: TermixClient,
+  agentId: string,
+  draft = listingDraft(),
+) {
   return client.request<{ id: string; status: string }>(`/api/v1/agents/${agentId}/services`, {
     method: "POST",
     body: JSON.stringify(draft),

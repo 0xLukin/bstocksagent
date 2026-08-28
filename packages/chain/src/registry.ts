@@ -160,13 +160,13 @@ export function aliasesFor(symbolOrAddress: string): string[] {
 export function formatWhitelistForPrompt(): string {
   const lines = listTokens().map((t) => {
     const aliases = aliasesFor(t.symbol);
-    const aka = aliases.length ? `（也称 ${aliases.join(" / ")}）` : "";
-    return `- ${t.symbol}${aka}：${t.name}`;
+    const aka = aliases.length ? ` (also ${aliases.join(" / ")})` : "";
+    return `- ${t.symbol}${aka}: ${t.name}`;
   });
   return [
-    "当前白名单（链上 symbol 在前）。用户说 NVDA、bNVDA、英伟达、NVIDIA 时一律按 NVDAB 处理，其它标的同理。",
-    "先调用 get_bstock_price / quote_swap，禁止在未查工具时断言「不在白名单」。get_bstock_price 返回 1 股值多少报价资产。白名单没有 AAPL、COIN、bAAPL、bCOIN。",
-    "用户说 BNB 是钱包里的原生 BNB（tokenIn/tokenOut 用 BNB）；说 WBNB 才是包装代币。两者余额不同，不要互相顶替。",
+    "Current whitelist (on-chain symbol first). NVDA, bNVDA, 英伟达, and NVIDIA all map to NVDAB; same pattern for other names.",
+    "Call get_bstock_price / quote_swap first. Do not claim something is off-whitelist without a tool. get_bstock_price returns how much quote asset 1 share is worth. There is no AAPL, COIN, bAAPL, or bCOIN.",
+    "Spoken BNB is native BNB in the wallet (tokenIn/tokenOut = BNB). WBNB is the wrapped token. Balances differ — do not substitute one for the other.",
     ...lines,
   ].join("\n");
 }

@@ -3,14 +3,15 @@
  * Default is dry-run (prints payload). Pass --publish to actually create+publish.
  */
 import { loadRepoEnv } from "@bstocks/chain";
-import { createListing, LISTING_DRAFT, publishListing, TermixClient, walletLogin } from "@bstocks/termix";
+import { createListing, listingDraft, publishListing, TermixClient, walletLogin } from "@bstocks/termix";
 
 loadRepoEnv();
 
 async function main() {
   const doPublish = process.argv.includes("--publish");
   const agentId = process.env.TERMIX_AGENT_ID;
-  console.log("Listing draft (instantBuyable=false, deliveryDays=3, USDT):\n", JSON.stringify(LISTING_DRAFT, null, 2));
+  const draft = listingDraft();
+  console.log("Listing draft (instantBuyable=false, deliveryDays=3, USDC):\n", JSON.stringify(draft, null, 2));
   if (!doPublish) {
     console.log("Dry run. Re-run with --publish after TERMIX_AGENT_ID + WALLET_KEY are set.");
     return;
@@ -20,7 +21,7 @@ async function main() {
   }
   const client = new TermixClient();
   await walletLogin(client);
-  const created = await createListing(client, agentId);
+  const created = await createListing(client, agentId, draft);
   console.log("created", created);
   const pub = await publishListing(client, created.id);
   console.log("published", pub);

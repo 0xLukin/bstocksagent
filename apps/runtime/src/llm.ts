@@ -27,7 +27,7 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
     localKind === "lp-compare"
   ) {
     const handled = await runLocalCommand(userText, ctx);
-    const reply = formatToolReply(handled ?? "做不到这一步。");
+    const reply = formatToolReply(handled ?? "I can't do that step.");
     recordTurns(ctx, userText, reply);
     return reply;
   }
@@ -94,17 +94,20 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
       }
       continue;
     }
-    const reply = msg.content?.trim() || "（空回复）";
+    const reply = msg.content?.trim() || "(empty reply)";
     recordTurns(ctx, userText, reply);
     return reply;
   }
-  return "本轮工具调用次数过多，已停止。请用户再发一条消息。";
+  return "Too many tool calls this turn. Please send another message.";
 }
 
 async function executeConfirm(userText: string, ctx: ToolCtx): Promise<string> {
   try {
     const handled = await runLocalCommand(userText, ctx);
-    return formatToolReply(handled ?? "还没有待确认的报价。请再说一次要买/卖的标的和金额，例如：用 100 USDT 买英伟达。");
+    return formatToolReply(
+      handled ??
+        "No pending quote. Restate the token and amount, e.g. buy 100 USDT of NVDAB / 用 100 USDT 买英伟达.",
+    );
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
@@ -119,13 +122,13 @@ function recordTurns(ctx: ToolCtx, userText: string, reply: string) {
 async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<string> {
   if (!ctx.conversation.geoConfirmed) {
     return [
-      "你好，我是 bstocks-yield（非投资建议）。",
-      "使用前请先声明：你不在美国及任何受限地区，并理解 bStocks 是证书类敞口、不是直接持股。",
-      "请回复：「我确认不在美国及受限地区」。",
+      "Hi, I'm bStocks Agent (not investment advice).",
+      "Before we start, confirm you are not in the United States or any restricted region, and that you understand bStocks are certificate-style exposure, not direct equity.",
+      'Reply: "I confirm I am not in the United States or a restricted region" or 「我确认不在美国及受限地区」.',
     ].join("\n");
   }
   if (!ctx.conversation.wallet) {
-    return "地理声明已记录。请发送你的 BSC 钱包地址（0x…）。之后我可以报价，但不会在你确认前创建交易。";
+    return "Geo declaration recorded. Send your BSC wallet address (0x…). I can quote after that, but I will not create a trade before you confirm.";
   }
   try {
     const handled = await runLocalCommand(userText, ctx);
@@ -134,9 +137,9 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
     return err instanceof Error ? err.message : String(err);
   }
   return [
-    "当前为本地规则回复（未配置 DEEPSEEK_API_KEY 也可跑通报价/出意图）。",
-    `已记录钱包 ${ctx.conversation.wallet}。地理确认=${ctx.conversation.geoConfirmed}，执行确认=${ctx.conversation.userConfirmed}。`,
-    "例句：报价 USDT→NVDAB 10 ；英伟达最高apr ；加 100u 那个最高的 ；加LP NVDAB 0.01 ；我的仓位 ；确认执行。",
-    `你刚才说：${userText.slice(0, 200)}`,
+    "Local rule replies (quotes and intents still work without DEEPSEEK_API_KEY).",
+    `Wallet ${ctx.conversation.wallet}. geo=${ctx.conversation.geoConfirmed}, confirm=${ctx.conversation.userConfirmed}.`,
+    "Examples: quote USDT→NVDAB 10 ; NVIDIA highest apr ; add 100u to the best pool ; addLP NVDAB 0.01 ; my positions ; confirm.",
+    `You said: ${userText.slice(0, 200)}`,
   ].join("\n");
 }

@@ -1,43 +1,43 @@
 import type { RemoteIntent } from "./runtime";
 
 const NAMES: Record<string, string> = {
-  NVDAB: "英伟达",
-  TSLAB: "特斯拉",
+  NVDAB: "NVIDIA",
+  TSLAB: "Tesla",
   CRCLB: "Circle",
-  MUB: "美光",
-  SNDKB: "闪迪",
+  MUB: "Micron",
+  SNDKB: "SanDisk",
   SPCXB: "SpaceX",
   AMDB: "AMD",
-  EWYB: "韩国 ETF",
-  INTCB: "英特尔",
-  MSTRB: "微策略",
+  EWYB: "Korea ETF",
+  INTCB: "Intel",
+  MSTRB: "MicroStrategy",
   LITEB: "Lumentum",
   METAB: "Meta",
-  MSFTB: "微软",
+  MSFTB: "Microsoft",
   PLTRB: "Palantir",
-  QQQB: "纳指",
+  QQQB: "Nasdaq-100",
   USDT: "USDT",
   USDC: "USDC",
   WBNB: "WBNB",
-  BNB: "原生 BNB",
+  BNB: "native BNB",
 };
 
 const KIND_TITLE: Record<string, string> = {
-  swap: "确认兑换",
-  "lp-mint": "确认添加流动性",
-  "lp-increase": "确认加仓",
-  "lp-decrease": "确认撤出",
-  "lp-collect": "确认收取手续费",
-  approve: "确认授权",
+  swap: "Confirm swap",
+  "lp-mint": "Confirm add liquidity",
+  "lp-increase": "Confirm increase",
+  "lp-decrease": "Confirm withdraw",
+  "lp-collect": "Confirm collect fees",
+  approve: "Confirm approve",
 };
 
 const KIND_CTA: Record<string, string> = {
-  swap: "确认兑换",
-  "lp-mint": "确认加池",
-  "lp-increase": "确认加仓",
-  "lp-decrease": "确认撤出",
-  "lp-collect": "确认收取",
-  approve: "确认授权",
+  swap: "Confirm swap",
+  "lp-mint": "Confirm mint",
+  "lp-increase": "Confirm increase",
+  "lp-decrease": "Confirm withdraw",
+  "lp-collect": "Confirm collect",
+  approve: "Confirm approve",
 };
 
 export type IntentView = {
@@ -72,20 +72,20 @@ export function formatUi(value: string, maxFrac = 6): string {
 
 export function remainingLabel(iso: string): { expired: boolean; text: string } {
   const ms = Date.parse(iso) - Date.now();
-  if (!Number.isFinite(ms) || ms <= 0) return { expired: true, text: "已过期，请回对话重新报价" };
+  if (!Number.isFinite(ms) || ms <= 0) return { expired: true, text: "Expired. Go back to chat for a new quote." };
   const mins = Math.max(1, Math.ceil(ms / 60_000));
-  return { expired: false, text: mins < 60 ? `${mins} 分钟内有效` : `${Math.floor(mins / 60)} 小时内有效` };
+  return { expired: false, text: mins < 60 ? `Valid for ${mins} min` : `Valid for ${Math.floor(mins / 60)} h` };
 }
 
 export function txTitle(label: string): string {
-  if (/approve/i.test(label)) return "授权";
-  if (/wrap/i.test(label)) return "包装 BNB";
-  if (/unwrap/i.test(label)) return "解包 BNB";
-  if (/swap/i.test(label)) return "兑换";
-  if (/increase/i.test(label)) return "加仓";
-  if (/decrease|withdraw/i.test(label)) return "撤出";
-  if (/mint/i.test(label)) return "添加流动性";
-  if (/collect/i.test(label)) return "收取手续费";
+  if (/approve/i.test(label)) return "Approve";
+  if (/wrap/i.test(label)) return "Wrap BNB";
+  if (/unwrap/i.test(label)) return "Unwrap BNB";
+  if (/swap/i.test(label)) return "Swap";
+  if (/increase/i.test(label)) return "Increase";
+  if (/decrease|withdraw/i.test(label)) return "Withdraw";
+  if (/mint/i.test(label)) return "Add liquidity";
+  if (/collect/i.test(label)) return "Collect fees";
   return label;
 }
 
@@ -122,7 +122,7 @@ export function buildIntentView(intent: RemoteIntent): IntentView {
       getName: tokenName(tokenOut),
       minGet: minGetUi(s),
       slippage: Number.isFinite(slip) ? `${(slip / 100).toFixed(2)}%` : undefined,
-      footnote: "证书 ≠ 股票，成交以链上为准。",
+      footnote: "Certificate ≠ stock. Settlement is whatever the chain fills.",
     };
   }
 
@@ -136,15 +136,15 @@ export function buildIntentView(intent: RemoteIntent): IntentView {
     return {
       title: KIND_TITLE[intent.kind],
       cta: KIND_CTA[intent.kind],
-      payAmount: a0 && a1 ? `${formatUi(a0, 4)} + ${formatUi(a1, 4)}` : "双边",
+      payAmount: a0 && a1 ? `${formatUi(a0, 4)} + ${formatUi(a1, 4)}` : "both sides",
       paySymbol: `${t0} + ${t1}`,
       payName: [tokenName(t0), tokenName(t1)].filter(Boolean).join(" / ") || undefined,
       getAmount: str(s, "rangeLabel") ?? "V3 LP",
-      getSymbol: intent.kind === "lp-increase" ? `仓位 #${str(s, "tokenId") ?? ""}` : "仓位 NFT",
+      getSymbol: intent.kind === "lp-increase" ? `Position #${str(s, "tokenId") ?? ""}` : "Position NFT",
       detail: [range, Number.isFinite(fee) ? `fee ${(fee / 10000).toFixed(2)}%` : undefined]
         .filter(Boolean)
         .join(" · "),
-      footnote: "LP 有无常损失，区间外不再吃手续费。数量按 V3 区间公式，不是现货对半。",
+      footnote: "LP can incur IL. Out of range earns no fees. Sizes use the V3 range formula, not a 50/50 spot split.",
     };
   }
 
@@ -156,11 +156,11 @@ export function buildIntentView(intent: RemoteIntent): IntentView {
     return {
       title: KIND_TITLE["lp-decrease"],
       cta: KIND_CTA["lp-decrease"],
-      payAmount: str(s, "tokenId") ? `#${str(s, "tokenId")}` : "仓位",
-      paySymbol: s.burn ? "撤出并销毁 NFT" : "部分撤出",
-      getAmount: a0 && a1 ? `${formatUi(a0, 4)} + ${formatUi(a1, 4)}` : "本金+费用",
+      payAmount: str(s, "tokenId") ? `#${str(s, "tokenId")}` : "Position",
+      paySymbol: s.burn ? "Withdraw and burn NFT" : "Partial withdraw",
+      getAmount: a0 && a1 ? `${formatUi(a0, 4)} + ${formatUi(a1, 4)}` : "principal + fees",
       getSymbol: `${t0} + ${t1}`,
-      footnote: "撤出会取回区间内本金和未收手续费。",
+      footnote: "Withdraw returns in-range principal and uncollected fees.",
     };
   }
 
@@ -173,21 +173,21 @@ export function buildIntentView(intent: RemoteIntent): IntentView {
       title: KIND_TITLE["lp-collect"],
       cta: KIND_CTA["lp-collect"],
       payAmount: "—",
-      paySymbol: "本金不动",
-      getAmount: a0 && a1 ? `${formatUi(a0, 6)} + ${formatUi(a1, 6)}` : "手续费",
-      getSymbol: t0 && t1 ? `${t0} + ${t1}` : "池内代币",
+      paySymbol: "Principal stays",
+      getAmount: a0 && a1 ? `${formatUi(a0, 6)} + ${formatUi(a1, 6)}` : "fees",
+      getSymbol: t0 && t1 ? `${t0} + ${t1}` : "pool tokens",
       detail: str(s, "tokenId") ? `NFT #${str(s, "tokenId")}` : undefined,
-      footnote: "只收手续费，不会撤出本金。",
+      footnote: "Collects fees only. Principal is not withdrawn.",
     };
   }
 
   return {
-    title: KIND_TITLE[intent.kind] ?? "确认签名",
-    cta: KIND_CTA[intent.kind] ?? "确认并签名",
+    title: KIND_TITLE[intent.kind] ?? "Confirm signature",
+    cta: KIND_CTA[intent.kind] ?? "Confirm and sign",
     payAmount: amountIn ? formatUi(amountIn) : "—",
     paySymbol: tokenIn ?? "",
     getAmount: amountOut ? formatUi(amountOut) : "—",
     getSymbol: tokenOut ?? "",
-    footnote: "请核对钱包弹窗里的网络和金额。",
+    footnote: "Check the network and amounts in the wallet popup.",
   };
 }

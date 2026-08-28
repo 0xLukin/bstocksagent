@@ -98,7 +98,7 @@ export function rankWhitelistV3Pools(token: string, rows: ExplorerPoolRow[]): Co
     highestApr,
     thickest,
     disclaimer:
-      "apr24h 是 Pancake Explorer 近 24 小时手续费年化，不是收益承诺，也不等于你的区间仓位收益。薄池数字不可用。只列白名单 V3（报价资产 USDT/USDC/WBNB）。",
+      "apr24h is Pancake Explorer 24h fee APR, not a yield promise and not your ranged-position return. Thin-pool numbers are not usable. Whitelist V3 only (quote assets USDT/USDC/WBNB).",
   };
 }
 

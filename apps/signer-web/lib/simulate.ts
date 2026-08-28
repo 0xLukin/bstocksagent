@@ -50,13 +50,13 @@ export async function simulateIntentTxs(
       await client.call(request);
       const gas = await client.estimateGas(request);
       gasLimit += gas;
-      notes.push(`第 ${i + 1} 笔模拟通过`);
+      notes.push(`Tx ${i + 1} simulated`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const pendingApprove = hasPriorApprove(txs, i) && ALLOWANCE_RE.test(message);
       if (pendingApprove || (/approve/i.test(tx.label ?? "") && ALLOWANCE_RE.test(message))) {
         gasLimit += fallbackGasLimit(tx.label);
-        notes.push(`第 ${i + 1} 笔需等授权上链，已按同类交易估 gas`);
+        notes.push(`Tx ${i + 1} needs the approve on-chain first; estimated from a similar tx`);
         continue;
       }
       const head = message.split("\n")[0] ?? message;
@@ -65,8 +65,8 @@ export async function simulateIntentTxs(
         status: "fail",
         notes,
         error: expired
-          ? `第 ${i + 1} 笔的链上截止时间已过（Transaction too old）。不要签这一页，回对话再说一次「确认执行」。`
-          : `第 ${i + 1} 笔模拟失败：${head.slice(0, 160)}`,
+          ? `Tx ${i + 1} deadline has passed (Transaction too old). Do not sign this page. Go back to chat and confirm again.`
+          : `Tx ${i + 1} simulation failed: ${head.slice(0, 160)}`,
       };
     }
   }
@@ -77,7 +77,7 @@ export async function simulateIntentTxs(
       gasBnb = formatEther(gasLimit * (await client.getGasPrice()));
     }
   } catch (err) {
-    notes.push(`gasPrice 读取失败：${err instanceof Error ? err.message : String(err)}`);
+    notes.push(`Failed to read gasPrice: ${err instanceof Error ? err.message : String(err)}`);
     return { status: "warn", notes, gasBnb };
   }
 

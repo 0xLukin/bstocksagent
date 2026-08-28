@@ -25,7 +25,7 @@ describe("intent binding", () => {
       risks: [],
     });
     expect(() => assertIntentBinding(intent, USER)).not.toThrow();
-    expect(() => assertIntentBinding(intent, OTHER)).toThrow(/绑定地址/);
+    expect(() => assertIntentBinding(intent, OTHER)).toThrow(/bound address/);
   });
 
   it("rejects cancelled intents and is idempotent", () => {
@@ -41,7 +41,7 @@ describe("intent binding", () => {
     const cancelled = store.cancel(intent.id);
     expect(cancelled.cancelledAt).toBeTruthy();
     expect(store.cancel(intent.id).cancelledAt).toBe(cancelled.cancelledAt);
-    expect(() => assertIntentBinding(store.get(intent.id)!, USER)).toThrow(/已取消/);
+    expect(() => assertIntentBinding(store.get(intent.id)!, USER)).toThrow(/cancelled/);
   });
 
   it("rejects expired intents", () => {
@@ -53,7 +53,7 @@ describe("intent binding", () => {
       summary: {},
       risks: [],
     });
-    expect(() => assertIntentBinding(intent, USER)).toThrow(/过期/);
+    expect(() => assertIntentBinding(intent, USER)).toThrow(/expired/i);
   });
 
   it("lists persisted intents", () => {

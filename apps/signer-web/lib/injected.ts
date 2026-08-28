@@ -25,7 +25,7 @@ export function injected() {
         withCapabilities?: withCapabilities | boolean;
       }) {
         const provider = getEthereum();
-        if (!provider) throw new Error("未检测到浏览器钱包（MetaMask / Rabby 等）");
+        if (!provider) throw new Error("No browser wallet detected (MetaMask / Rabby, etc.)");
         const raw = (await provider.request({ method: "eth_requestAccounts" })) as string[];
         const accounts = raw.map((a) => getAddress(a)) as Address[];
         const chainId = Number((await provider.request({ method: "eth_chainId" })) as string);
@@ -58,9 +58,9 @@ export function injected() {
       },
       async switchChain({ chainId }) {
         const provider = getEthereum();
-        if (!provider) throw new Error("未检测到浏览器钱包");
+        if (!provider) throw new Error("No browser wallet detected");
         const chain = config.chains.find((item) => item.id === chainId);
-        if (!chain) throw new Error(`不支持的链 ${chainId}`);
+        if (!chain) throw new Error(`Unsupported chain ${chainId}`);
         try {
           await provider.request({
             method: "wallet_switchEthereumChain",

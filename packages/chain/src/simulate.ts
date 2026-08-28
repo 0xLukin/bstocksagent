@@ -64,7 +64,7 @@ export async function simulatePreparedTxs(
       await client.call(request);
       const gas = await client.estimateGas(request);
       gasLimit += gas;
-      notes.push(`第 ${i + 1} 笔模拟通过，约 ${gas.toString()} gas`);
+      notes.push(`Tx ${i + 1} simulated, ~${gas.toString()} gas`);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const pendingApprove =
@@ -72,17 +72,17 @@ export async function simulatePreparedTxs(
       if (pendingApprove) {
         const guess = fallbackGasLimit(tx.label);
         gasLimit += guess;
-        notes.push(`第 ${i + 1} 笔需等上一笔授权上链后再兑换；暂按 ${guess.toString()} gas 估算`);
+        notes.push(`Tx ${i + 1} needs the prior approve on-chain first; estimating ${guess.toString()} gas`);
         continue;
       }
       if (/approve/i.test(tx.label ?? "") && (isAllowanceSimError(message) || /execution reverted/i.test(message))) {
         const guess = fallbackGasLimit(tx.label);
         gasLimit += guess;
-        notes.push(`第 ${i + 1} 笔授权未能精确模拟，暂按 ${guess.toString()} gas 估算`);
+        notes.push(`Tx ${i + 1} approve could not be simulated exactly; estimating ${guess.toString()} gas`);
         continue;
       }
       hardFail = true;
-      notes.push(`第 ${i + 1} 笔模拟失败：${message.slice(0, 240)}`);
+      notes.push(`Tx ${i + 1} simulation failed: ${message.slice(0, 240)}`);
       break;
     }
   }
@@ -92,7 +92,7 @@ export async function simulatePreparedTxs(
     try {
       gasFeeWei = gasLimit * (await client.getGasPrice());
     } catch (err) {
-      notes.push(`gasPrice 读取失败：${err instanceof Error ? err.message : String(err)}`);
+      notes.push(`Failed to read gasPrice: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
