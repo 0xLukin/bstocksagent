@@ -664,7 +664,7 @@ export async function buildCollectTx(args: {
 export async function buildIncreaseLpTxs(args: {
   userAddress: Address;
   tokenId: bigint;
-  amountTokenUi: string;
+  amountTokenUi?: string;
   amountQuoteUi?: string;
   slippageBps: number;
   deadlineSeconds: number;

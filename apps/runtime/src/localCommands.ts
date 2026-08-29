@@ -4,12 +4,13 @@ import {
   getToken,
   isWhitelisted,
   findWhitelistedTokenInText,
+  listTokens,
   pickComparedPool,
   swapAssetSymbol,
   type CompareLpResult,
 } from "@bstocks/chain";
 import { isUserCancel, isUserConfirm } from "@bstocks/risk";
-import { nextConfirmKind, type PendingLp, type PendingQuote, isFundingSwapForLp, latchSwapThenLpPlan, parkedMint } from "./conversation.js";
+import { nextConfirmKind, type PendingLp, type PendingQuote, isFundingSwapForLp, isBuyThenLp, latchSwapThenLpPlan, parkedMint } from "./conversation.js";
 import { serviceFeeLabel } from "./hire.js";
 import { runTool, continueSwapThenLp, maybeSettleLpAfterTx, intentFilled, lpSignerIsReusable, type ToolCtx } from "./tools.js";
 import { lpPickWantsExecute, parseLpPick as parseLpOptionNumber } from "./lpPropose.js";
@@ -31,6 +32,12 @@ export type LocalCmd =
   | { kind: "positions" }
   | { kind: "collect"; tokenId?: string }
   | { kind: "decrease"; fractionBps: number }
+  | { kind: "increase"; amountTokenUi?: string; amountQuoteUi?: string }
+  | { kind: "catalog" }
+  | { kind: "sell-dust" }
+  | { kind: "amend-half" }
+  | { kind: "amend-pay"; tokenIn: string; amountInUi?: string }
+  | { kind: "requote" }
   | { kind: "confirm" }
   | { kind: "proceed" }
   | { kind: "cancel" }
@@ -42,7 +49,21 @@ export type LocalCmd =
 export function bypassLlm(kind: LocalCmd["kind"], hasLlm: boolean): boolean {
   if (kind === "none") return false;
   if (kind === "cancel" || kind === "confirm" || kind === "proceed") return true;
-  if (kind === "positions" || kind === "collect" || kind === "decrease") return true;
+  if (
+    kind === "positions" ||
+    kind === "collect" ||
+    kind === "decrease" ||
+    kind === "increase" ||
+    kind === "catalog" ||
+    kind === "sell-dust" ||
+    kind === "amend-half" ||
+    kind === "amend-pay" ||
+    kind === "requote" ||
+    kind === "quote" ||
+    kind === "price"
+  ) {
+    return true;
+  }
   return !hasLlm;
 }
 
@@ -112,8 +133,24 @@ function spokenQuoteAsset(raw: string): string {
   return "USDT";
 }
 
-export function parseBuySell(text: string): PendingQuote | null {
+export function wantsLpAfterTrade(text: string): boolean {
   const t = text.trim();
+  if (/(?:然后|再|接着|并|同时).{0,12}(?:组|加).{0,8}(?:lp|LP|池)/i.test(t)) return true;
+  if (/(?:买|买入).{0,24}(?:然后|再).{0,8}(?:组|加).{0,8}(?:lp|LP|池)/i.test(t)) return true;
+  return false;
+}
+
+function signerTtlMinutes(): number {
+  const ms = Number(process.env.INTENT_TTL_MS ?? "600000");
+  return Math.max(1, Math.round((Number.isFinite(ms) ? ms : 600_000) / 60_000));
+}
+
+function stripLpAfterClause(text: string): string {
+  return text.replace(/\s*(?:然后|再|接着|并|同时).{0,16}(?:组|加).{0,8}(?:lp|LP|池).*$/i, "").trim();
+}
+
+export function parseBuySell(text: string): PendingQuote | null {
+  const t = stripLpAfterClause(text.trim());
   const enBuy = t.match(
     new RegExp(`(?:buy|purchase)\\s+(\\d+(?:\\.\\d+)?)\\s*(${QUOTE_ASSET})\\s*(?:of|worth of)?\\s*(${TOK})`, "i"),
   );
@@ -205,13 +242,13 @@ export function rememberSwapQuote(ctx: ToolCtx, quote: PendingQuote) {
     }
     return;
   }
-  if (parkedMint(ctx.conversation.lastLp) && isFundingSwapForLp(swap, ctx.conversation.lastLp)) {
+  if (parkedMint(ctx.conversation.lastLp) && (isFundingSwapForLp(swap, ctx.conversation.lastLp) || isBuyThenLp(swap, ctx.conversation.lastLp))) {
     latchSwapThenLpPlan(ctx.conversation, swap, ctx.conversation.lastLp!);
     ctx.conversations.save(ctx.conversation);
     return;
   }
   ctx.conversation.lastQuote = swap;
-  delete ctx.conversation.lastLp;
+  if (ctx.conversation.pendingPlan?.kind !== "swap_then_lp") delete ctx.conversation.lastLp;
   ctx.conversations.save(ctx.conversation);
 }
 
@@ -561,7 +598,7 @@ function formatSwapQuote(data: {
       "- 非交易时段价差可能更大。",
       "- 不是投资建议，是否执行由你决定。",
       "",
-      "看完回复「确认执行」生成签名页。取消回复「取消」。",
+      `看完回复「确认」出签名页。取消回复「取消」。签名页约 ${signerTtlMinutes()} 分钟有效，过期再说「确认」会重开。`,
     ].join("\n");
   }
   const title = buyingBstock
@@ -577,7 +614,7 @@ function formatSwapQuote(data: {
     "- Slippage: 50 bps default (cap 80 bps)",
     "",
     "bStocks are certificate-style exposure, not equity, no voting rights. Off-hours the on-chain price can drift. Not investment advice.",
-    "Reply confirm / 确认执行 for a signer page. Say cancel / 取消 to stop.",
+    `Reply 「确认」 for a signer page. Cancel with 「取消」. The page lasts ~${signerTtlMinutes()} minutes; say 「确认」 again if it expires.`,
   ].join("\n");
 }
 
@@ -683,7 +720,7 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
           `第 2 步（兑换到账后再确认）：组 LP ${mint}，默认区间 ±30%。`,
           "",
           "风险：兑换有滑点；组 LP 有无常损失，出区间没有手续费。证书敞口不是持股。不是投资建议。",
-          "回复「确认执行」先出第 1 步签名页。签完后会自动出第 2 步 LP 页；也可以回来说「继续」。",
+          "回复「确认」先出第 1 步签名页。签完后会自动出第 2 步 LP 页；也可以回来说「继续」。",
         ].join("\n");
       }
       return [
@@ -691,7 +728,7 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
         `Step 1 (confirm now): ${pay}`,
         `Step 2 (confirm after the swap lands): mint LP ${mint}, default range ±30%.`,
         "Risks: swap slippage; LP impermanent loss. Certificate exposure is not equity. Not investment advice.",
-        "Reply confirm / 确认执行 for the funding-swap signer page. After you sign it, the LP page opens; you can also say 继续.",
+        "Reply 「确认」 for the funding-swap signer page. After you sign it, the LP page opens; you can also say 继续.",
       ].join("\n");
     }
     if (
@@ -799,7 +836,7 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
           ];
       const lines = data.options.map((o) => `${o.n}. ${o.title}\n   ${o.note}`);
       const tail = zh
-        ? ["", "回复数字选方案（1 / 2 / 3）。选完后「确认」才出签名页。取消回复「取消」。", "APR 是池子 24h 手续费，不是你的实际收益。无常损失；出区间没有手续费。"]
+        ? ["", "回复数字选方案（1 / 2 / 3）。选完后回复「确认」出签名页。取消回复「取消」。", "方案里的 APR 是池子 24h 手续费，不是你的实际收益。无常损失；出区间没有手续费。"]
         : ["", "Reply with 1 / 2 / 3. Confirm after you pick. Cancel with 取消.", "Pool 24h fee APR is not your return. IL applies."];
       return [...head, ...lines, ...tail].filter(Boolean).join("\n");
     }
@@ -841,14 +878,24 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
             : `Uncollected ~$${p.feesUsdApprox} · range ${p.priceLower}–${p.priceUpper}`,
         ].join("\n");
       });
+      const outOfRange = data.positions.some((p) => !p.inRange);
+      const bal = data.balances as { usdt?: string; bnb?: string } | undefined;
+      const next = zh
+        ? [
+            bal?.usdt || bal?.bnb ? `钱包余额：USDT ${bal?.usdt ?? "?"} · BNB ${bal?.bnb ?? "?"}` : "",
+            outOfRange
+              ? "有仓位已出区间（不再赚手续费）。领手续费说「收手续费」；退出重开说「赎回」；加仓说「加仓 10 USDT」。然后回复「确认」。"
+              : "领手续费说「收手续费」，退出说「赎回」，加仓说「加仓 10 USDT」。然后回复「确认」。",
+          ].filter(Boolean)
+        : [
+            "Collect with 收手续费. Exit with 赎回. Add to the same NFT with 加仓 10 USDT. Then 「确认」.",
+          ];
       return [
         zh
           ? `${data.count ?? data.positions.length} 个仓位（不是收益承诺）：`
           : `${data.count ?? data.positions.length} position(s) (not a yield promise):`,
         ...lines,
-        zh
-          ? "领手续费说「收手续费」，退出仓位说「赎回」或「退出全部仓位」，然后回复「确认」。"
-          : "Collect with 收手续费. Exit with 赎回 / withdraw all, then confirm.",
+        ...next,
       ].join("\n\n");
     }
     if (data.signerUrl) {
@@ -873,8 +920,8 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
               ? "领取手续费签名页已生成（不是投资建议）。本金还在仓位里。"
               : "Collect-fees signer page ready (not investment advice). Principal stays in the position."
             : zh
-              ? "签名页已生成（不是投资建议）。"
-              : "Signer intent created from the last confirmed plan (not investment advice).";
+          ? "签名页已生成。用绑定钱包打开，核对后签名。过期回聊天再说「确认」。"
+          : "Signer page ready. Use the bound wallet. If it expires, say 「确认」 again.";
       return [
         headline,
         pair.trim(),
@@ -955,6 +1002,39 @@ function isUserProceed(text: string): boolean {
   return false;
 }
 
+function parseCatalogSpeech(text: string): boolean {
+  return /^(?:能买什么|可以买什么|有哪些(?:标的|票|证书)?|支持哪些|白名单|what can i (?:buy|trade))[?？]?$/i.test(
+    text.trim(),
+  );
+}
+
+function parseIncreaseSpeech(text: string): Extract<LocalCmd, { kind: "increase" }> | null {
+  const t = text.trim();
+  const m = t.match(
+    /(?:加仓|补仓|往(?:这个|该)?仓位(?:里)?(?:再)?(?:打|加|补))\s*(\d+(?:\.\d+)?)\s*(u|usdt|usd|usdc|bnb|wbnb|股)?/i,
+  );
+  if (!m) return null;
+  const amt = m[1]!;
+  const unit = (m[2] ?? "usdt").toLowerCase();
+  if (unit === "股") return { kind: "increase", amountTokenUi: amt };
+  return { kind: "increase", amountQuoteUi: amt };
+}
+
+function parseSellDustSpeech(text: string): boolean {
+  return /把(?:这些|赎回的|撤出来的|刚撤的|尘埃).{0,8}卖掉|卖掉尘埃|清掉尘埃|把赎回的卖掉/i.test(text);
+}
+
+function parseAmendSpeech(text: string): LocalCmd | null {
+  const t = text.trim();
+  if (/^(?:改成一半|改一半|一半金额)[。.!！]?$/i.test(t)) return { kind: "amend-half" };
+  if (/^(?:再报一次|重新报价|再报个价)[。.!！]?$/i.test(t)) return { kind: "requote" };
+  const withAmt = t.match(/改成(?:用)?\s*(\d+(?:\.\d+)?)\s*(usdc|usdt|usd|u|wbnb|bnb)/i);
+  if (withAmt) return { kind: "amend-pay", tokenIn: spokenQuoteAsset(withAmt[2]!), amountInUi: withAmt[1]! };
+  const asset = t.match(/换成\s*(usdc|usdt|usd|u|wbnb|bnb)/i);
+  if (asset) return { kind: "amend-pay", tokenIn: spokenQuoteAsset(asset[1]!) };
+  return null;
+}
+
 export function isUserRestart(text: string): boolean {
   const t = text.trim();
   return /全部重来|重新来|从头开始|重来一遍|start over|reset (the )?plan/i.test(t) && !isUserConfirm(t);
@@ -971,6 +1051,12 @@ export function parseLocalCommand(text: string): LocalCmd {
   if (collect) return collect;
   if (isDecreaseFullSpeech(t)) return { kind: "decrease", fractionBps: 10_000 };
   if (DECREASE_HALF.test(t)) return { kind: "decrease", fractionBps: 5_000 };
+  if (parseCatalogSpeech(t)) return { kind: "catalog" };
+  if (parseSellDustSpeech(t)) return { kind: "sell-dust" };
+  const inc = parseIncreaseSpeech(t);
+  if (inc) return inc;
+  const amended = parseAmendSpeech(t);
+  if (amended) return amended;
   if (isPositionsSpeech(t)) return { kind: "positions" };
   const spokenLp = parseAddLp(t);
   if (spokenLp) {
@@ -1187,7 +1273,7 @@ async function resumePendingExecution(ctx: ToolCtx, kind: "confirm" | "proceed")
     });
   }
 
-  if (kind === "proceed" && ctx.conversation.lastSettled?.kind?.startsWith("lp") && !plan && !managing) {
+  if (kind === "proceed" && ctx.conversation.lastSettled && !plan && !managing) {
     const t = ctx.conversation.lastSettled;
     return JSON.stringify({ kind: "lp-settled", message: t.message, tokenId: t.tokenId, pair: t.pair, intentId: t.intentId });
   }
@@ -1315,12 +1401,12 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
     if (zh) {
       return [
         `将领取 NFT #${pos.tokenId}（${pos.token0}/${pos.token1}）的手续费。本金不动。${fees}`.trim(),
-        "核对后回复「确认」生成签名页（不是投资建议）。",
+        "核对后回复「确认」出签名页。",
       ].join("\n");
     }
     return [
       `Will collect fees from NFT #${pos.tokenId} (${pos.token0}/${pos.token1}). Principal stays.`,
-      "Reply confirm / 确认执行 after you check.",
+      "Reply 「确认」 after you check.",
     ].join("\n");
   }
 
@@ -1335,11 +1421,87 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
       const label = all ? "退出全部流动性并销毁 NFT" : "撤出一半流动性";
       return [
         `将${label}：NFT #${pos.tokenId}（${pos.token0}/${pos.token1}）${amounts ? `，${amounts} 回到钱包` : ""}。手续费一并领取。`,
-        "按当下池价结算，实际到账以链上为准。核对后回复「确认」生成签名页（不是投资建议）。",
+        "按当下池价结算，实际到账以链上为准。核对后回复「确认」出签名页。",
       ].join("\n");
     }
     const label = all ? "withdraw all (and burn the NFT)" : "withdraw half the liquidity";
-    return [`Will ${label}: NFT #${pos.tokenId} (${pos.token0}/${pos.token1}).`, "Reply confirm / 确认执行 after you check."].join("\n");
+    return [`Will ${label}: NFT #${pos.tokenId} (${pos.token0}/${pos.token1}).`, "Reply 「确认」 after you check."].join("\n");
+  }
+
+  if (cmd.kind === "increase") {
+    const pos = await pickPosition(ctx, undefined, findWhitelistedTokenInText(text));
+    rememberLp(ctx, {
+      token: positionBstock(pos),
+      increaseTokenId: pos.tokenId,
+      amountTokenUi: cmd.amountTokenUi,
+      amountQuoteUi: cmd.amountQuoteUi,
+    });
+    const quoteAmt = cmd.amountQuoteUi ? `${cmd.amountQuoteUi} USDT` : `${cmd.amountTokenUi} ${positionBstock(pos)}`;
+    return [
+      `将加仓 NFT #${pos.tokenId}（${pos.token0}/${pos.token1}）：约 ${quoteAmt}。不会新开第二个仓位。`,
+      "核对后回复「确认」出签名页。",
+    ].join("\n");
+  }
+
+  if (cmd.kind === "catalog") {
+    const rows = listTokens().filter((t) => t.kind === "bstock");
+    const lines = rows.map((t) => {
+      const aka = aliasesFor(t.symbol).filter((a) => a !== t.symbol).slice(0, 4);
+      return `- ${t.symbol}（${t.name.replace(/\s*\(bStocks\)\s*/i, "")}${aka.length ? ` / ${aka.join("、")}` : ""}）`;
+    });
+    return ["能买的白名单证书（BSC / Pancake V3）：", ...lines, "", "直接说金额，例如：用 10 USDT 买英伟达。不是投资建议。"].join("\n");
+  }
+
+  if (cmd.kind === "sell-dust") {
+    const pair = ctx.conversation.lastSettled?.kind === "lp-decrease" ? ctx.conversation.lastSettled.pair : undefined;
+    const token = pair?.split("/").find((p) => !/^(USDT|USDC|WBNB|BNB)$/i.test(p));
+    if (!token) {
+      return JSON.stringify({
+        error: "no_pending",
+        message: "没有刚赎回的仓位可清。先说「赎回」并签完，或直接说「全部 NVDAB 卖掉」。",
+      });
+    }
+    const filled = await fillAllAmount(ctx, { tokenIn: token, tokenOut: "USDT", amountInUi: "all" });
+    rememberSwapQuote(ctx, filled);
+    return runTool(
+      "quote_swap",
+      JSON.stringify({ tokenIn: filled.tokenIn, tokenOut: filled.tokenOut, amountInUi: filled.amountInUi }),
+      ctx,
+    );
+  }
+
+  if (cmd.kind === "amend-half" || cmd.kind === "amend-pay" || cmd.kind === "requote") {
+    const cur = ctx.conversation.lastQuote;
+    if (!cur) {
+      return JSON.stringify({ error: "no_pending", message: "没有待改的报价。先说要买/卖多少，例如：用 10 USDT 买英伟达。" });
+    }
+    let next = { ...cur };
+    if (cmd.kind === "amend-half") {
+      const n = Number(cur.amountInUi);
+      if (!Number.isFinite(n) || n <= 0) {
+        return JSON.stringify({ error: "no_pending", message: "当前报价金额没法减半。请直接说新的数量。" });
+      }
+      next = { ...cur, amountInUi: String(n / 2) };
+    } else if (cmd.kind === "amend-pay") {
+      if (!cmd.amountInUi && /^(BNB|WBNB)$/i.test(cmd.tokenIn) && !/^(BNB|WBNB)$/i.test(cur.tokenIn)) {
+        return JSON.stringify({
+          error: "no_pending",
+          message: `换成 ${cmd.tokenIn} 需要新的数量。例如：改成用 0.01 BNB。`,
+        });
+      }
+      next = {
+        tokenIn: cmd.tokenIn,
+        tokenOut: cur.tokenOut,
+        amountInUi: cmd.amountInUi ?? cur.amountInUi,
+      };
+    }
+    const filled = await fillAllAmount(ctx, next);
+    rememberSwapQuote(ctx, filled);
+    return runTool(
+      "quote_swap",
+      JSON.stringify({ tokenIn: filled.tokenIn, tokenOut: filled.tokenOut, amountInUi: filled.amountInUi }),
+      ctx,
+    );
   }
 
   if (cmd.kind === "quote") {
@@ -1348,6 +1510,14 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
       tokenOut: cmd.tokenOut,
       amountInUi: cmd.amountInUi,
     });
+    if (wantsLpAfterTrade(text)) {
+      try {
+        const token = getToken(filled.tokenOut).symbol;
+        ctx.conversation.lastLp = { token, quote: "USDT", rangeBps: DEFAULT_LP_RANGE_BPS };
+      } catch {
+        /* tokenOut not a bstock */
+      }
+    }
     rememberSwapQuote(ctx, filled);
     const quoted = await runTool(
       "quote_swap",
@@ -1405,7 +1575,7 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
     return [
       analysis,
       "",
-      `Noted LP mint: ${size} · ${pool}, default range ±30%. Reply confirm / 确认执行 to get a signer page. ${apr}`,
+      `Noted LP mint: ${size} · ${pool}, default range ±30%. Reply 「确认」 to get a signer page. ${apr}`,
     ].join("\n");
   }
 
@@ -1431,6 +1601,9 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
         ? ctx.intents.get(ctx.conversation.pendingPlan.swapIntentId)
         : undefined;
     if (pending.committed || ctx.conversation.lastLpProposal?.selected != null || intentFilled(swapIntent)) {
+      if (!hasMintSize(pending) && ctx.conversation.lastLpProposal?.selected == null) {
+        return runTool("propose_lp", JSON.stringify({ token: pending.token }), ctx);
+      }
       return runTool(
         "create_lp_intent",
         JSON.stringify({

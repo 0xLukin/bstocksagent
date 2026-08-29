@@ -35,13 +35,18 @@ async function send(text: string) {
 
 async function main() {
   console.log(`Local Termix chat → ${base}/chat  conversation=${conversationId}`);
-  try {
-    const boot = await post({ conversationId, reset: true });
-    if (boot.reply) console.log(boot.reply);
-  } catch (err) {
-    console.error("未能重置会话（Runtime 没起来？）", err instanceof Error ? err.message : err);
+  const reset = process.argv.includes("--reset");
+  if (reset) {
+    try {
+      const boot = await post({ conversationId, reset: true });
+      if (boot.reply) console.log(boot.reply);
+    } catch (err) {
+      console.error("未能重置会话（Runtime 没起来？）", err instanceof Error ? err.message : err);
+    }
+  } else {
+    console.log("沿用上次会话。清空报价和对话：说「全部重来」，或启动加 --reset。");
   }
-  console.log("Examples: 我确认不在美国及受限地区 / 0x… / 查询一下nvdab的报价 / 用 10 USDT 买英伟达 / 组 LP / 确认执行");
+  console.log("Examples: 我确认不在美国及受限地区 / 0x… / 能买什么 / 用 10 USDT 买英伟达 / 组 LP / 赎回 / 确认");
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     while (true) {

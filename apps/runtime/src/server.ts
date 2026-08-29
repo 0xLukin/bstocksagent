@@ -9,7 +9,7 @@ import { assertIntentBinding, type IntentStore } from "./intents.js";
 import { getA2AStatus } from "./a2aStatus.js";
 import { serviceFeeLabel } from "./hire.js";
 import { runAgentTurn } from "./llm.js";
-import { maybeContinueSwapThenLpAfterTx, maybeSettleLpAfterTx, type ToolCtx } from "./tools.js";
+import { maybeContinueSwapThenLpAfterTx, maybeSettleLpAfterTx, maybeSettleSwapAfterTx, type ToolCtx } from "./tools.js";
 
 export function createApp(
   intents: IntentStore,
@@ -126,6 +126,8 @@ export function createApp(
                 intents.patch(intent.id, { followUpSignerUrl: follow.nextSignerUrl });
               } else if (follow.nextError) {
                 intents.patch(intent.id, { followUpError: follow.nextError });
+              } else {
+                await maybeSettleSwapAfterTx(ctx, intents.get(intent.id) ?? intent);
               }
             } catch (err) {
               const message = err instanceof Error ? err.message : String(err);

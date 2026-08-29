@@ -144,7 +144,7 @@ export async function buildLpProposal(args: {
           amountQuoteUi: need.needQuote,
           needTokenUi: need.needToken,
           needQuoteUi: need.needQuote,
-          note: `现在就能组：约 ${trimAmt(need.needToken)} ${token} + ${trimAmt(need.needQuote)} ${quote}。24h 池手续费 APR 约 ${pool.apr24hPct.toFixed(1)}%，不是你的实际收益。`,
+          note: `现在就能组：约 ${trimAmt(need.needToken)} ${token} + ${trimAmt(need.needQuote)} ${quote}。出区间没有手续费。`,
         });
       }
 

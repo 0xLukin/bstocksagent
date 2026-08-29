@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { getAddress, type Address } from "viem";
-import type { CompareLpResult } from "@bstocks/chain";
+import { getToken, type CompareLpResult } from "@bstocks/chain";
 import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
 import { listingDraft, type InboxMessage } from "@bstocks/termix";
 import type { LpProposal } from "./lpPropose.js";
@@ -48,9 +48,29 @@ export function isFundingSwapForLp(swap?: PendingQuote, lp?: PendingLp): boolean
   return out === quote || (quote === "WBNB" && (out === "BNB" || out === "WBNB"));
 }
 
+/** USDT/USDC/BNB → bStock, then mint that token's LP (buy then add). */
+export function isBuyThenLp(swap?: PendingQuote, lp?: PendingLp): boolean {
+  if (!swap || !lp?.token) return false;
+  if (lp.collectTokenId || lp.decreaseTokenId || lp.increaseTokenId) return false;
+  const inn = swap.tokenIn.toUpperCase();
+  if (!["USDT", "USDC", "BNB", "WBNB"].includes(inn)) return false;
+  try {
+    if (getToken(swap.tokenOut).symbol !== getToken(lp.token).symbol) return false;
+  } catch {
+    return false;
+  }
+  return Boolean(
+    lp.committed ||
+      lp.amountTokenUi ||
+      lp.amountQuoteUi ||
+      lp.budgetQuoteUi ||
+      (lp.quote && lp.fee == null),
+  );
+}
+
 /** If a funding swap and an LP mint are both in memory, persist them as one two-step plan. */
 export function latchSwapThenLpPlan(state: ConversationState, swap: PendingQuote, lp: PendingLp): boolean {
-  if (!isFundingSwapForLp(swap, lp)) return false;
+  if (!isFundingSwapForLp(swap, lp) && !isBuyThenLp(swap, lp)) return false;
   const prev = state.pendingPlan?.kind === "swap_then_lp" ? state.pendingPlan : undefined;
   state.lastQuote = swap;
   state.lastLp = lp;
@@ -572,9 +592,13 @@ export function formatRuntimeState(state: ConversationState): string {
       "No pending quote. If the user only says confirm with nothing pending, ask them to restate the token and amount in one sentence. Do not turn it into a questionnaire. On cancel, do not keep asking.",
     );
   }
-  if (state.lastSettled?.kind?.startsWith("lp")) {
+  if (state.lastSettled) {
     const t = state.lastSettled;
-    if (t.kind === "lp-decrease") {
+    if (t.kind === "swap") {
+      lines.push(
+        `Last swap settled: ${t.message}. Report this on 签完了. A new buy/sell is a new quote. 「确认」only executes a pending plan.`,
+      );
+    } else if (t.kind === "lp-decrease") {
       lines.push(
         `Last LP withdraw already settled: ${t.pair ?? "position"} ${t.tokenId ? `was NFT #${t.tokenId}` : ""} intent ${t.intentId}. Report this on 签完了. A new 赎回 / 退出仓位 is a new withdraw — do not replay this note.`,
       );

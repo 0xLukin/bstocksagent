@@ -27,7 +27,11 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
 
   if (isUserRestart(userText)) {
     cancelPendingTrade(ctx);
+    ctx.conversations.beginLocalSession(ctx.conversation.id);
     ctx.conversation = ctx.conversations.get(ctx.conversation.id);
+    const reply = "会话已重置。钱包和地区声明还在。直接说买/卖/组 LP/赎回。";
+    recordTurns(ctx, userText, reply);
+    return reply;
   }
 
   const fromPick = await applyLpPickFromText(ctx, userText);
@@ -50,12 +54,6 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
 
   if (!env.llmKey) {
     return await fallbackWithoutLlm(userText, ctx);
-  }
-
-  if (cmd.kind === "quote" && cmd.amountInUi.toLowerCase() === "all") {
-    const reply = await executeConfirm(userText, ctx);
-    recordTurns(ctx, userText, reply);
-    return reply;
   }
 
   if (bypassLlm(cmd.kind, true)) {
@@ -89,7 +87,7 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
       content: [
         `Parser hint (suggestion only): ${JSON.stringify(cmd)}.`,
         "If it matches the user's sentence, call the corresponding tool.",
-        "The full user sentence wins if they conflict. Follow-ups like 改成一半 / 换成 USDT / 再报一次 replace the pending plan.",
+        "Follow-ups like 改成一半 / 换成 USDT / 再报一次 are handled by rules when lastQuote exists.",
         "Never dump tool JSON. Reply in the user's language with amounts, pool, risks, and the next step.",
       ].join(" "),
     });
@@ -204,7 +202,9 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
   }
   if (isUserRestart(userText)) {
     cancelPendingTrade(ctx);
+    ctx.conversations.beginLocalSession(ctx.conversation.id);
     ctx.conversation = ctx.conversations.get(ctx.conversation.id);
+    return "会话已重置。钱包和地区声明还在。直接说买/卖/组 LP/赎回。";
   }
   try {
     const handled = await runLocalCommand(userText, ctx);

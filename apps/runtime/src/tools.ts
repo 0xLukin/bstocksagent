@@ -31,6 +31,7 @@ import { TermixClient } from "@bstocks/termix";
 import { buildDeliveryReport, renderMarkdown } from "@bstocks/report";
 import {
   canCreateDefiIntent,
+  isBuyThenLp,
   isFundingSwapForLp,
   latchSwapThenLpPlan,
   parkedMint,
@@ -321,7 +322,7 @@ function gate(state: ConversationState) {
     throw new Error("Geo not confirmed. Ask the user to declare they are not in the US or a restricted region.");
   }
   if (!state.userConfirmed) {
-    throw new Error("User has not confirmed. Show the plan, then wait for confirm / 确认执行.");
+    throw new Error("User has not confirmed. Show the plan, then wait for 「确认」.");
   }
   if (!state.wallet) {
     throw new Error("No user wallet yet. Ask for a 0x address.");
@@ -424,7 +425,7 @@ function afterCreateSwapIntent(ctx: ToolCtx, intentId: string) {
     ctx.conversation.userConfirmed = false;
     return;
   }
-  if (parkedMint(s.lastLp) && isFundingSwapForLp(swapFromIntent, s.lastLp) && swapFromIntent) {
+  if (parkedMint(s.lastLp) && swapFromIntent && (isFundingSwapForLp(swapFromIntent, s.lastLp) || isBuyThenLp(swapFromIntent, s.lastLp))) {
     latchSwapThenLpPlan(s, swapFromIntent, s.lastLp!);
     s.pendingPlan = { ...s.pendingPlan!, swapIntentId: intentId, phase: "swap" };
     s.userConfirmed = false;
@@ -443,11 +444,17 @@ export function intentFilled(intent: { txs: unknown[]; txHashes: unknown[] } | u
   return intent.txs.length > 0 && intent.txHashes.length >= intent.txs.length;
 }
 
+export function intentExpired(intent: { expiresAt?: string } | undefined): boolean {
+  if (!intent?.expiresAt) return false;
+  return Date.parse(intent.expiresAt) <= Date.now();
+}
+
 export function lpSignerIsReusable(intent: StoredIntent | undefined): boolean {
   if (!intent || intent.cancelledAt) return false;
   if (!intent.kind.startsWith("lp")) return false;
   if (intent.txHashes.length > 0) return false;
   if (intent.simulation?.ok === false) return false;
+  if (intentExpired(intent)) return false;
   return true;
 }
 
@@ -519,7 +526,7 @@ function synthesizeSwapThenLp(s: ConversationState, known?: StoredIntent): boole
           amountInUi: String(summary.amountInUi ?? ""),
         }
       : undefined);
-  if (!swap || !isFundingSwapForLp(swap, lp)) return false;
+  if (!swap || (!isFundingSwapForLp(swap, lp) && !isBuyThenLp(swap, lp))) return false;
   s.pendingPlan = {
     kind: "swap_then_lp",
     phase: "swap",
@@ -601,6 +608,38 @@ async function continueSwapThenLpInner(ctx: ToolCtx, known?: StoredIntent, recor
 
   const lp = ctx.conversation.lastLp ?? plan.lp;
   if (!lp) return { error: "no_lp", message: "两步计划里没有组 LP 的参数。" };
+
+  const sized = Boolean(lp.amountTokenUi || lp.amountQuoteUi || lp.budgetQuoteUi);
+  if (!sized && !lp.committed) {
+    const raw = await runTool("propose_lp", JSON.stringify({ token: lp.token }), ctx);
+    const parsed = JSON.parse(raw) as ContinuePlanResult & { kind?: string; options?: unknown[] };
+    if (recordTurn) {
+      ctx.conversations.appendTurn(
+        ctx.conversation.id,
+        "assistant",
+        "兑换已上链。按现在的余额选组 LP 方案（回复数字），选完再说「确认」。",
+      );
+    }
+    ctx.intents.patch(swapIntent.id, {
+      followUpError: "兑换已上链。请回聊天回复数字选组 LP 方案，选完再说「确认」。",
+    });
+    const tin = String(swapIntent.summary.tokenIn ?? "");
+    const tout = String(swapIntent.summary.tokenOut ?? "");
+    const ain = String(swapIntent.summary.amountInUi ?? "");
+    const aout = String(swapIntent.summary.amountOutUi ?? "");
+    ctx.conversations.markSettled(ctx.conversation.id, {
+      kind: "swap",
+      intentId: swapIntent.id,
+      at: new Date().toISOString(),
+      txHashes: [...swapIntent.txHashes],
+      pair: `${tin}/${tout}`,
+      message: `兑换已上链。${ain} ${tin} → ${aout} ${tout}。请回复数字选组 LP 方案，选完再说「确认」。`,
+    });
+    ctx.conversation = ctx.conversations.get(ctx.conversation.id);
+    return parsed.kind === "lp-propose"
+      ? parsed
+      : { error: "lp_failed", message: parsed.message ?? raw };
+  }
 
   let lastErr = "组 LP 失败";
   for (let i = 0; i < 4; i++) {
@@ -770,6 +809,35 @@ export async function maybeSettleLpAfterTx(
   return { settledNote: message };
 }
 
+export async function maybeSettleSwapAfterTx(
+  ctx: ToolCtx,
+  intent: StoredIntent,
+): Promise<{ settledNote?: string }> {
+  if (intent.kind !== "swap" || !intentFilled(intent)) return {};
+  const s = ctx.conversations.get(intent.conversationId ?? ctx.conversation.id);
+  ctx.conversation = s;
+  if (s.pendingPlan?.kind === "swap_then_lp") return {};
+  if (s.lastSettled?.intentId === intent.id) return { settledNote: s.lastSettled.message };
+  const tin = String(intent.summary.tokenIn ?? "");
+  const tout = String(intent.summary.tokenOut ?? "");
+  const ain = String(intent.summary.amountInUi ?? "");
+  const aout = String(intent.summary.amountOutUi ?? "");
+  const lastHash = intent.txHashes.at(-1);
+  const message = `兑换已上链。${ain} ${tin} → ${aout} ${tout}${lastHash ? `（${lastHash}）` : ""}。不是投资建议。`;
+  ctx.conversations.markSettled(s.id, {
+    kind: "swap",
+    intentId: intent.id,
+    at: new Date().toISOString(),
+    txHashes: [...intent.txHashes],
+    pair: tin && tout ? `${tin}/${tout}` : undefined,
+    message,
+  });
+  ctx.conversations.appendTurn(s.id, "assistant", message);
+  ctx.conversation = ctx.conversations.get(s.id);
+  ctx.intents.patch(intent.id, { settledNote: message });
+  return { settledNote: message };
+}
+
 export async function maybeContinueSwapThenLpAfterTx(
   ctx: ToolCtx,
   intent: StoredIntent,
@@ -786,6 +854,9 @@ export async function maybeContinueSwapThenLpAfterTx(
 
   const result = await continueSwapThenLp(ctx, intent, true);
   if (result.signerUrl) return { nextSignerUrl: result.signerUrl };
+  if ((result as { kind?: string }).kind === "lp-propose") {
+    return { nextError: "兑换已上链。请回聊天回复数字选组 LP 方案，选完再说「确认」。" };
+  }
   if (result.error && result.error !== "no_plan") return { nextError: result.message ?? result.error };
   return {};
 }
@@ -867,11 +938,14 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       if (ctx.conversation.pendingPlan.phase === "swap" && !ctx.conversation.pendingPlan.swapIntentId) {
         latchSwapThenLpPlan(ctx.conversation, swap, ctx.conversation.pendingPlan.lp);
       }
-    } else if (parkedMint(ctx.conversation.lastLp) && isFundingSwapForLp(swap, ctx.conversation.lastLp)) {
+    } else if (
+      parkedMint(ctx.conversation.lastLp) &&
+      (isFundingSwapForLp(swap, ctx.conversation.lastLp) || isBuyThenLp(swap, ctx.conversation.lastLp))
+    ) {
       latchSwapThenLpPlan(ctx.conversation, swap, ctx.conversation.lastLp!);
     } else {
       ctx.conversation.lastQuote = swap;
-      delete ctx.conversation.lastLp;
+      if (ctx.conversation.pendingPlan?.kind !== "swap_then_lp") delete ctx.conversation.lastLp;
     }
     ctx.conversations.save(ctx.conversation);
     return serializeToolResult({
@@ -997,7 +1071,21 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   if (name === "list_positions") {
     if (!ctx.conversation.wallet) throw new Error("No user wallet recorded yet.");
     const positions = await listPositions(ctx.conversation.wallet, client);
-    return serializeToolResult({ wallet: ctx.conversation.wallet, count: positions.length, positions });
+    const account = ctx.conversation.wallet;
+    let usdt = "";
+    let bnb = "";
+    try {
+      usdt = (await readBalanceUi(client, getToken("USDT"), account)).uiDisplay;
+      bnb = (await readBalanceUi(client, getToken("WBNB"), account, { native: true })).uiDisplay;
+    } catch {
+      /* balances optional */
+    }
+    return serializeToolResult({
+      wallet: ctx.conversation.wallet,
+      count: positions.length,
+      positions,
+      balances: { usdt, bnb },
+    });
   }
 
   if (name === "read_balance") {
@@ -1131,17 +1219,18 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     if (!verdict.ok) return serializeToolResult({ error: "risk_blocked", blockers: verdict.blockers });
     const displayIn = nativeIn || built.quote.nativeIn ? "BNB" : built.quote.tokenIn.symbol;
     const displayOut = nativeOut || built.quote.nativeOut ? "BNB" : built.quote.tokenOut.symbol;
+    const swapForPark = {
+      tokenIn: displayIn,
+      tokenOut: displayOut,
+      amountInUi: built.quote.amountInUi,
+    };
     const parked =
       ctx.conversation.pendingPlan?.kind === "swap_then_lp"
         ? ctx.conversation.pendingPlan.lp
-        : parkedMint(ctx.conversation.lastLp)
+        : isFundingSwapForLp(swapForPark, ctx.conversation.lastLp) || isBuyThenLp(swapForPark, ctx.conversation.lastLp)
           ? ctx.conversation.lastLp
           : (() => {
-              const opt = fundOptionForSwap(ctx.conversation.lastLpProposal, {
-                tokenIn: displayIn,
-                tokenOut: displayOut,
-                amountInUi: built.quote.amountInUi,
-              });
+              const opt = fundOptionForSwap(ctx.conversation.lastLpProposal, swapForPark);
               return opt ? pendingLpFromOption(opt) : undefined;
             })();
     const intent = ctx.intents.create({
@@ -1266,11 +1355,11 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       return withGasWarning(ctx.conversation.wallet, { intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (args.increaseTokenId) {
-      if (!args.amountTokenUi) throw new Error("Increase needs amountTokenUi");
+      if (!args.amountTokenUi && !args.amountQuoteUi) throw new Error("加仓需要数量，例如：加仓 10 USDT");
       const built = await buildIncreaseLpTxs({
         userAddress: ctx.conversation.wallet!,
         tokenId: BigInt(String(args.increaseTokenId)),
-        amountTokenUi: String(args.amountTokenUi),
+        amountTokenUi: args.amountTokenUi ? String(args.amountTokenUi) : undefined,
         amountQuoteUi: args.amountQuoteUi ? String(args.amountQuoteUi) : undefined,
         slippageBps: cfg.defaultSlippageBps,
         deadlineSeconds: cfg.deadlineSeconds,

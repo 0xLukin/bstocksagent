@@ -9,6 +9,7 @@ import {
   parseLocalCommand,
   parseSpokenFee,
   rememberLp,
+  wantsLpAfterTrade,
 } from "../src/localCommands.js";
 import type { ToolCtx } from "../src/tools.js";
 
@@ -24,6 +25,7 @@ describe("parseLocalCommand", () => {
 
   it("parses confirm", () => {
     expect(parseLocalCommand("确认执行")).toEqual({ kind: "confirm" });
+    expect(parseLocalCommand("确认")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("确定")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("我确认")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("confirm")).toEqual({ kind: "confirm" });
@@ -131,6 +133,20 @@ describe("parseLocalCommand", () => {
     expect(parseLocalCommand("帮我把 NVDAB 的lp 仓位赎回")).toEqual({ kind: "decrease", fractionBps: 10_000 });
     expect(parseLocalCommand("帮我把nvdab的lp仓位赎回")).toEqual({ kind: "decrease", fractionBps: 10_000 });
     expect(parseLocalCommand("组 LP").kind).toBe("lp");
+    expect(parseLocalCommand("能买什么")).toEqual({ kind: "catalog" });
+    expect(parseLocalCommand("加仓 10 USDT")).toEqual({ kind: "increase", amountQuoteUi: "10" });
+    expect(parseLocalCommand("改成一半")).toEqual({ kind: "amend-half" });
+    expect(parseLocalCommand("换成 BNB")).toEqual({ kind: "amend-pay", tokenIn: "BNB" });
+    expect(parseLocalCommand("再报一次")).toEqual({ kind: "requote" });
+    expect(parseLocalCommand("把赎回的卖掉")).toEqual({ kind: "sell-dust" });
+    expect(parseLocalCommand("用 20 USDT 买英伟达然后组LP")).toMatchObject({
+      kind: "quote",
+      tokenIn: "USDT",
+      tokenOut: "英伟达",
+      amountInUi: "20",
+    });
+    expect(wantsLpAfterTrade("用 20 USDT 买英伟达然后组LP")).toBe(true);
+    expect(wantsLpAfterTrade("用 20 USDT 买英伟达")).toBe(false);
   });
 
   it("parses cancel", () => {
@@ -173,9 +189,9 @@ describe("parseLocalCommand", () => {
     });
   });
 
-  it("sends spoken quotes to the LLM when a key is present", () => {
-    expect(bypassLlm("quote", true)).toBe(false);
-    expect(bypassLlm("price", true)).toBe(false);
+  it("keeps buy/sell/price on the rule path even when an LLM key is present", () => {
+    expect(bypassLlm("quote", true)).toBe(true);
+    expect(bypassLlm("price", true)).toBe(true);
     expect(bypassLlm("lp", true)).toBe(false);
     expect(bypassLlm("lp-compare", true)).toBe(false);
     expect(bypassLlm("confirm", true)).toBe(true);
@@ -185,6 +201,9 @@ describe("parseLocalCommand", () => {
     expect(bypassLlm("collect", true)).toBe(true);
     expect(bypassLlm("positions", true)).toBe(true);
     expect(bypassLlm("quote", false)).toBe(true);
+    expect(bypassLlm("catalog", true)).toBe(true);
+    expect(bypassLlm("increase", true)).toBe(true);
+    expect(bypassLlm("amend-half", true)).toBe(true);
     expect(bypassLlm("none", true)).toBe(false);
   });
 
@@ -485,7 +504,7 @@ describe("parseLocalCommand", () => {
     expect(text).toContain("0.01 BNB");
     expect(text).toContain("原生 BNB");
     expect(text).toContain("0.25%");
-    expect(text).toContain("确认执行");
+    expect(text).toContain("确认");
     expect(text).not.toContain("amountInRaw");
     expect(text).not.toMatch(/^\s*\{/);
   });

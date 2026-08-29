@@ -3,7 +3,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { InboxMessage } from "@bstocks/termix";
-import { ConversationStore, formatRuntimeState, isFundingSwapForLp, latchSwapThenLpPlan, nextConfirmKind, recoverParkedLpFromTurns, type ConversationState } from "../src/conversation.js";
+import { ConversationStore, formatRuntimeState, isBuyThenLp, isFundingSwapForLp, latchSwapThenLpPlan, nextConfirmKind, recoverParkedLpFromTurns, type ConversationState } from "../src/conversation.js";
 
 const WALLET = "0x3e01a5779cfa830794dbb9c8673a61b3c5c5608a";
 
@@ -183,6 +183,27 @@ describe("Termix conversation memory", () => {
     const lp = { token: "NVDAB", decreaseTokenId: "7277622", decreaseBps: 10_000 };
     expect(isFundingSwapForLp(swap, lp)).toBe(false);
     expect(nextConfirmKind({ id: "local", geoConfirmed: true, userConfirmed: false, lastQuote: swap, lastLp: lp, updatedAt: new Date().toISOString() })).toBe("none");
+  });
+
+  it("latches buy-then-lp when USDT buys the parked token, not a leftover analyze", () => {
+    const buy = { tokenIn: "USDT", tokenOut: "NVDAB", amountInUi: "20" };
+    const afterBuy = { token: "NVDAB", quote: "USDT", rangeBps: 3000 };
+    expect(isBuyThenLp(buy, afterBuy)).toBe(true);
+    expect(isFundingSwapForLp(buy, afterBuy)).toBe(false);
+    const s: ConversationState = {
+      id: "local",
+      geoConfirmed: true,
+      userConfirmed: false,
+      lastQuote: buy,
+      lastLp: afterBuy,
+      updatedAt: new Date().toISOString(),
+    };
+    expect(latchSwapThenLpPlan(s, buy, afterBuy)).toBe(true);
+    expect(s.pendingPlan?.kind).toBe("swap_then_lp");
+
+    const analyzeOnly = { token: "NVDAB", quote: "USDT", fee: 2500, rangeBps: 3000 };
+    expect(isBuyThenLp(buy, analyzeOnly)).toBe(false);
+    expect(isBuyThenLp({ tokenIn: "NVDAB", tokenOut: "USDT", amountInUi: "0.5" }, afterBuy)).toBe(false);
   });
 
   it("recovers a parked LP mint from the last assistant plan", () => {

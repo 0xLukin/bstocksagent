@@ -47,7 +47,7 @@ export function loadEnv() {
     publicUrl: process.env.RUNTIME_PUBLIC_URL ?? "http://127.0.0.1:8787",
     signerWebUrl: process.env.SIGNER_WEB_URL ?? "http://127.0.0.1:3000",
     pollMs: Math.max(5000, Number(process.env.A2A_POLL_INTERVAL_MS ?? "5000")),
-    intentTtlMs: Number(process.env.INTENT_TTL_MS ?? "180000"),
+    intentTtlMs: Number(process.env.INTENT_TTL_MS ?? "600000"),
     agentId: process.env.TERMIX_AGENT_ID ?? "",
     agentHandle: process.env.TERMIX_AGENT_HANDLE ?? "bStocks",
     ...llm,
