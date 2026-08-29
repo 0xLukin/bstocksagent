@@ -2,8 +2,8 @@
   "schema_version": 1,
   "diagram_type": "architecture",
   "meta": {
-    "title": "bStocks Agent 运行时架构",
-    "locale": "zh-CN",
+    "title": "bStocks Agent Runtime",
+    "locale": "en",
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/0xLukin/bstocksagent",
@@ -12,21 +12,21 @@
     "views": [
       {
         "id": "hire-path",
-        "label": "雇佣主路径",
+        "label": "Hire path",
         "focus": ["buyer", "termix", "poller", "hire", "http", "signer", "chain"],
-        "note": "Termix inbox → 接单报价 → 签名页 → 买家自己广播。"
+        "note": "Termix inbox → accept and quote → signer page → buyer broadcasts."
       },
       {
         "id": "trust",
-        "label": "托管边界",
+        "label": "Custody boundary",
         "focus": ["buyer", "signer", "termix", "hire"],
-        "note": "用户 DeFi 与 Agent 托管费必须分开。"
+        "note": "User DeFi and the agent escrow fee stay separate."
       },
       {
         "id": "runtime",
-        "label": "Runtime 内核",
+        "label": "Runtime core",
         "focus": ["poller", "hire", "memory", "http", "risk", "watchdog"],
-        "note": "单一进程：轮询、状态机、意图 HTTP、看门狗。"
+        "note": "One process: poller, state machine, intent HTTP, watchdog."
       }
     ]
   },
@@ -44,7 +44,7 @@
       "id": "llm",
       "type": "external",
       "label": "DeepSeek",
-      "sublabel": "未匹配口令",
+      "sublabel": "unmatched phrases",
       "brand": "deepseek",
       "tag": "flash",
       "row": 0,
@@ -74,7 +74,7 @@
       "id": "hire",
       "type": "backend",
       "label": "Hire / tools",
-      "sublabel": "状态机 + 口令",
+      "sublabel": "state machine + phrases",
       "row": 0,
       "col": 3,
       "sources": [
@@ -95,7 +95,7 @@
       "id": "watchdog",
       "type": "backend",
       "label": "Watchdog",
-      "sublabel": "接单 / 催交 / claim",
+      "sublabel": "accept / nudge / claim",
       "row": 0,
       "col": 5,
       "sources": [{ "path": "apps/runtime/src/watchdog.ts", "label": "startOrderWatchdog" }]
@@ -103,7 +103,7 @@
     {
       "id": "buyer",
       "type": "external",
-      "label": "买家钱包",
+      "label": "Buyer wallet",
       "sublabel": "BSC · MetaMask",
       "row": 1,
       "col": 0
@@ -112,7 +112,7 @@
       "id": "risk",
       "type": "security",
       "label": "Risk / whitelist",
-      "sublabel": "geo · 滑点 · 池深",
+      "sublabel": "geo · slip · depth",
       "row": 1,
       "col": 2,
       "sources": [{ "path": "packages/risk/src/gates.ts", "line": 15, "label": "evaluateRisk" }]
@@ -120,7 +120,7 @@
     {
       "id": "memory",
       "type": "database",
-      "label": ".data 记忆",
+      "label": ".data memory",
       "sublabel": "conversationId",
       "row": 1,
       "col": 3,
@@ -151,12 +151,12 @@
   "boundaries": [
     {
       "kind": "region",
-      "label": "Agent runtime（WALLET_KEY）",
+      "label": "Agent runtime (WALLET_KEY)",
       "wraps": ["poller", "hire", "http", "watchdog", "risk", "memory"]
     },
     {
       "kind": "security-group",
-      "label": "买家托管：私钥不出钱包",
+      "label": "Buyer custody: key stays in wallet",
       "wraps": ["buyer", "signer"]
     }
   ],
@@ -166,33 +166,33 @@
     { "id": "poller-to-hire", "from": "poller", "to": "hire", "label": "runAgentTurn", "variant": "emphasis" },
     { "id": "hire-to-http", "from": "hire", "to": "http", "label": "intent", "variant": "emphasis" },
     { "id": "http-to-signer", "from": "http", "to": "signer", "label": "/intents/:id", "variant": "emphasis", "labelDy": 24 },
-    { "id": "signer-to-chain", "from": "signer", "to": "chain", "label": "用户广播", "variant": "emphasis" },
+    { "id": "signer-to-chain", "from": "signer", "to": "chain", "label": "user broadcast", "variant": "emphasis", "labelDy": 54 },
     { "id": "hire-to-memory", "from": "hire", "to": "memory", "label": "persist", "labelDy": 24 },
     { "id": "hire-to-risk", "from": "hire", "to": "risk", "label": "gate", "variant": "security" }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "雇佣主路径",
+      "title": "Hire path",
       "items": [
-        "geo → send the standard offer → 0.01 USDC checkout → 接单 → quote → confirm → 签名页 → deliver now",
-        "Termix 线程在 hirePhase=working 之前不会出签名页；签名页 URL 不是成交"
+        "geo → send the standard offer → 0.01 USDC checkout → accept → quote → confirm → signer → deliver now",
+        "No signer page until hirePhase=working; a signer URL is not a fill"
       ]
     },
     {
       "dot": "rose",
-      "title": "两笔钱分开",
+      "title": "Two money flows",
       "items": [
-        "托管费：Hire / Watchdog 用 WALLET_KEY 走 Termix offer / accept / deliver / claimAfterTimeout",
-        "用户 DeFi：买家在 Signer 上签 approve / swap / LP，Runtime 不广播用户交易"
+        "Escrow fee: Hire / Watchdog use WALLET_KEY for offer / accept / deliver / claimAfterTimeout",
+        "User DeFi: buyer signs approve / swap / LP on Signer; Runtime does not broadcast user txs"
       ]
     },
     {
       "dot": "amber",
-      "title": "约束（不画更多边）",
+      "title": "Constraints",
       "items": [
-        "未匹配口令才打 DeepSeek；口令与雇佣短路径不经模型",
-        "仅 BSC + Pancake V3；无 V2 / Infinity / x402 / Agent Studio"
+        "DeepSeek only for unmatched phrases; hire short-paths skip the model",
+        "BSC + Pancake V3 only; no V2 / Infinity / x402 / Agent Studio"
       ]
     }
   ]

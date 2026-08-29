@@ -2,43 +2,43 @@
   "schema_version": 1,
   "diagram_type": "sequence",
   "meta": {
-    "title": "bStocks Agent 雇佣时序",
-    "locale": "zh-CN",
+    "title": "bStocks Agent Hire Sequence",
+    "locale": "en",
     "quality_profile": "showcase",
     "column_fit": "spread",
     "viewBox": [980, 566],
     "views": [
       {
         "id": "escrow",
-        "label": "托管接单",
+        "label": "Escrow accept",
         "focus": ["buyer", "termix", "runtime"],
-        "note": "geo 发卡、0.01 USDC checkout、Watchdog 用 WALLET_KEY 接单。"
+        "note": "geo, 0.01 USDC checkout, then Watchdog accepts with WALLET_KEY."
       },
       {
         "id": "desk",
-        "label": "签名与广播",
+        "label": "Sign and broadcast",
         "focus": ["buyer", "runtime", "signer", "chain"],
-        "note": "working 后才出签名页；买家自己广播。"
+        "note": "No signer page until working; the buyer broadcasts."
       },
       {
         "id": "settle",
-        "label": "交付放款",
+        "label": "Deliver and release",
         "focus": ["buyer", "termix", "runtime"],
-        "note": "submitDelivery 后买家放款，托管费入账。"
+        "note": "After submitDelivery the buyer releases escrow."
       }
     ]
   },
   "participants": [
-    { "id": "buyer", "type": "external", "label": "买家钱包", "sublabel": "MetaMask" },
+    { "id": "buyer", "type": "external", "label": "Buyer wallet", "sublabel": "MetaMask" },
     { "id": "termix", "type": "external", "label": "Termix", "sublabel": "inbox / escrow" },
     { "id": "runtime", "type": "backend", "label": "Runtime", "sublabel": "hire + poll" },
     { "id": "signer", "type": "frontend", "label": "Signer", "sublabel": "/t/:intentId" },
     { "id": "chain", "type": "cloud", "label": "Pancake V3", "sublabel": "chainId 56" }
   ],
   "segments": [
-    { "from": 148, "to": 292, "label": "雇佣" },
-    { "from": 300, "to": 428, "label": "干活" },
-    { "from": 436, "to": 484, "label": "结算" }
+    { "from": 148, "to": 292, "label": "Hire" },
+    { "from": 300, "to": 428, "label": "Work" },
+    { "from": 436, "to": 484, "label": "Settle" }
   ],
   "messages": [
     { "id": "m-geo", "from": "buyer", "to": "termix", "y": 176, "label": "geo + standard offer", "variant": "security" },
@@ -48,7 +48,7 @@
     { "id": "m-confirm", "from": "buyer", "to": "termix", "y": 320, "label": "confirm quote", "variant": "emphasis" },
     { "id": "m-url", "from": "runtime", "to": "buyer", "y": 352, "label": "signer URL", "variant": "return" },
     { "id": "m-open", "from": "buyer", "to": "signer", "y": 384, "label": "open /t/:id", "variant": "default" },
-    { "id": "m-broadcast", "from": "signer", "to": "chain", "y": 416, "label": "用户广播", "variant": "emphasis" },
+    { "id": "m-broadcast", "from": "signer", "to": "chain", "y": 416, "label": "user broadcast", "variant": "emphasis" },
     { "id": "m-deliver", "from": "runtime", "to": "termix", "y": 444, "label": "submitDelivery", "variant": "emphasis" },
     { "id": "m-release", "from": "buyer", "to": "termix", "y": 468, "label": "release escrow", "variant": "return" }
   ],
@@ -61,18 +61,18 @@
   "cards": [
     {
       "dot": "cyan",
-      "title": "买家雇 Agent",
-      "items": ["geo → standard offer → 0.01 USDC checkout → working 后才能报价"]
+      "title": "Buyer hires the agent",
+      "items": ["geo → standard offer → 0.01 USDC checkout → quote only after working"]
     },
     {
       "dot": "rose",
-      "title": "Agent 被雇",
-      "items": ["WALLET_KEY 只做 offer / accept / deliver / claim；Runtime 每 5s pollInbox"]
+      "title": "Agent is hired",
+      "items": ["WALLET_KEY only does offer / accept / deliver / claim; Runtime pollInbox every 5s"]
     },
     {
       "dot": "amber",
-      "title": "用户 DeFi",
-      "items": ["签名页 eth_call 后由买家广播；空交付需 confirm empty delivery"]
+      "title": "User DeFi",
+      "items": ["Signer eth_call, then the buyer broadcasts; empty jobs need confirm empty delivery"]
     }
   ]
 }

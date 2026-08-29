@@ -2,41 +2,41 @@
   "schema_version": 1,
   "diagram_type": "lifecycle",
   "meta": {
-    "title": "bStocks Agent 雇佣生命周期",
-    "locale": "zh-CN",
+    "title": "bStocks Agent Hire Lifecycle",
+    "locale": "en",
     "quality_profile": "showcase",
     "viewBox": [980, 566],
     "views": [
       {
         "id": "hire-rail",
-        "label": "雇佣主轨",
+        "label": "Hire rail",
         "focus": ["quoting", "offered", "working", "delivered", "settled"],
-        "note": "买家雇 Agent：发卡 → 托管 → 干活 → 交付 → 放款。"
+        "note": "Buyer hires the agent: offer card → escrow → work → deliver → release."
       },
       {
         "id": "provider-accept",
-        "label": "Agent 被雇",
+        "label": "Agent is hired",
         "focus": ["offered", "accept", "working"],
-        "note": "买家 checkout 0.01 USDC 后，Watchdog 用 WALLET_KEY 接单。"
+        "note": "After 0.01 USDC checkout, Watchdog accepts with WALLET_KEY."
       },
       {
         "id": "desk-work",
-        "label": "working 里的功能",
+        "label": "Work in working",
         "focus": ["working", "signer", "delivered"],
-        "note": "confirm 出签名页；买家自己广播 swap / LP 后再交付。"
+        "note": "confirm opens the signer page; buyer broadcasts swap / LP, then deliver."
       }
     ]
   },
   "lanes": [
-    { "id": "main", "label": "雇佣主轨" },
-    { "id": "waiting", "label": "接单与功能" }
+    { "id": "main", "label": "Hire rail" },
+    { "id": "waiting", "label": "Accept and desk" }
   ],
   "states": [
     {
       "id": "quoting",
       "type": "start",
       "label": "quoting",
-      "sublabel": "geo 后发卡",
+      "sublabel": "offer after geo",
       "lane": "main",
       "col": 0,
       "step": "01",
@@ -46,7 +46,7 @@
       "id": "offered",
       "type": "waiting",
       "label": "offered",
-      "sublabel": "0.01 USDC 卡",
+      "sublabel": "0.01 USDC card",
       "lane": "main",
       "col": 1,
       "step": "02",
@@ -56,7 +56,7 @@
       "id": "working",
       "type": "active",
       "label": "working",
-      "sublabel": "才允许 DeFi",
+      "sublabel": "DeFi unlocked",
       "lane": "main",
       "col": 2,
       "step": "03",
@@ -66,7 +66,7 @@
       "id": "delivered",
       "type": "waiting",
       "label": "delivered",
-      "sublabel": "等放款",
+      "sublabel": "await release",
       "lane": "main",
       "col": 3,
       "step": "04",
@@ -76,7 +76,7 @@
       "id": "settled",
       "type": "success",
       "label": "settled",
-      "sublabel": "托管费入账",
+      "sublabel": "fee credited",
       "lane": "main",
       "col": 4,
       "step": "05",
@@ -127,30 +127,30 @@
       "id": "t-broadcast",
       "from": "signer",
       "to": "delivered",
-      "label": "用户广播",
+      "label": "user broadcast",
       "variant": "emphasis"
     }
   ],
   "cards": [
     {
       "dot": "cyan",
-      "title": "买家雇 Agent",
+      "title": "Buyer hires the agent",
       "items": [
-        "geo → standard offer → 0.01 USDC checkout → working 后才能报价 / 加 LP"
+        "geo → standard offer → 0.01 USDC checkout → quote / LP only after working"
       ]
     },
     {
       "dot": "rose",
-      "title": "Agent 被雇",
+      "title": "Agent is hired",
       "items": [
-        "WALLET_KEY 只做 offer / accept / deliver / claim；SETTLED 后再来一单"
+        "WALLET_KEY only does offer / accept / deliver / claim; another hire after SETTLED"
       ]
     },
     {
       "dot": "amber",
-      "title": "working 里的功能",
+      "title": "Work in working",
       "items": [
-        "签名页做 swap / LP；cancel 只撤报价；空交付需 confirm empty delivery"
+        "Signer does swap / LP; cancel drops the quote; empty jobs need confirm empty delivery"
       ]
     }
   ]
