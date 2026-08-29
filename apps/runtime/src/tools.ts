@@ -26,9 +26,16 @@ import {
   type PreparedTx,
 } from "@bstocks/chain";
 import { evaluateRisk, loadRiskConfig } from "@bstocks/risk";
-import { sendConversationOffer, TermixClient } from "@bstocks/termix";
+import { TermixClient } from "@bstocks/termix";
 import { buildDeliveryReport, renderMarkdown } from "@bstocks/report";
-import type { ConversationState, ConversationStore } from "./conversation.js";
+import { canCreateDefiIntent, type ConversationState, type ConversationStore } from "./conversation.js";
+import {
+  acceptFundedOrder,
+  refreshHireFromTermix,
+  sendStandardOffer,
+  serviceFeeLabel,
+  submitHireDelivery,
+} from "./hire.js";
 import type { IntentStore } from "./intents.js";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -209,7 +216,7 @@ export const TOOL_DEFS = [
     type: "function",
     function: {
       name: "send_termix_offer",
-      description: "Send a custom USDC offer in the current Termix conversation. Requires confirm.",
+      description: `Send the listing Standard offer (${serviceFeeLabel()} escrow) in this Termix conversation. Use after geo when the buyer asks for the standard quote. Do not use this for DeFi size.`,
       parameters: {
         type: "object",
         properties: {
@@ -217,7 +224,37 @@ export const TOOL_DEFS = [
           scope: { type: "string" },
           message: { type: "string" },
         },
-        required: ["price", "scope"],
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "provider_accept_order",
+      description:
+        "Seller-side: accept a funded Termix order on-chain. Call immediately when hirePhase is funded. Uses the agent wallet, not the buyer.",
+      parameters: {
+        type: "object",
+        properties: { orderId: { type: "string" } },
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "submit_termix_delivery",
+      description:
+        "Upload the written report and submitDelivery on-chain. Call when hirePhase is working and the buyer asked to deliver, or after the DeFi tx is verified.",
+      parameters: {
+        type: "object",
+        properties: {
+          orderId: { type: "string" },
+          notes: { type: "string" },
+          confirmEmpty: {
+            type: "boolean",
+            description: "Set true only after the buyer explicitly accepts a report with no DeFi hash.",
+          },
+        },
       },
     },
   },
@@ -241,6 +278,42 @@ function gate(state: ConversationState) {
   if (!state.wallet) {
     throw new Error("No user wallet yet. Ask for a 0x address.");
   }
+}
+
+const MIN_GAS_BNB = 0.0008;
+
+async function gasWarning(wallet: Address): Promise<string | undefined> {
+  try {
+    const wei = await getPublicClient().getBalance({ address: wallet });
+    const bnb = Number(formatEther(wei));
+    if (!Number.isFinite(bnb)) return undefined;
+    if (bnb < MIN_GAS_BNB) {
+      return `BNB on the bound wallet is ${bnb} — likely not enough gas to broadcast. Fund BNB on BSC before signing.`;
+    }
+    if (bnb < 0.002) {
+      return `BNB on the bound wallet is ${bnb} (low). Checkout/sign may fail if gas spikes.`;
+    }
+  } catch {
+    /* quote still useful */
+  }
+  return undefined;
+}
+
+async function withGasWarning(wallet: Address | undefined, payload: Record<string, unknown>) {
+  const gas = wallet ? await gasWarning(wallet) : undefined;
+  return JSON.stringify({ ...payload, ...(gas ? { gasWarning: gas } : {}) });
+}
+
+function gateDefiHire(state: ConversationState) {
+  if (!canCreateDefiIntent(state)) {
+    return JSON.stringify({
+      error: "hire_not_ready",
+      hirePhase: state.hirePhase ?? "none",
+      message:
+        `Termix hire is not in working yet. Accept the ${serviceFeeLabel()} offer and finish checkout first. The signer page comes after I accept the order.`,
+    });
+  }
+  return null;
 }
 
 function riskFor(args: {
@@ -394,6 +467,8 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "create_swap_intent") {
+    const blocked = gateDefiHire(ctx.conversation);
+    if (blocked) return blocked;
     gate(ctx.conversation);
     const cfg = loadRiskConfig();
     const slippageBps = Number(args.slippageBps ?? cfg.defaultSlippageBps);
@@ -520,7 +595,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     consumePending(ctx);
     const signerUrl = signerOf(ctx, intent);
     rememberCreatedIntent(ctx, { id: intent.id, kind: "swap", signerUrl, summary: intent.summary });
-    return JSON.stringify({
+    return withGasWarning(ctx.conversation.wallet, {
       intentId: intent.id,
       signerUrl,
       expiresAt: intent.expiresAt,
@@ -529,6 +604,8 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "create_lp_intent") {
+    const blocked = gateDefiHire(ctx.conversation);
+    if (blocked) return blocked;
     gate(ctx.conversation);
     const cfg = loadRiskConfig();
     const token = String(args.token ?? "NVDAB");
@@ -568,7 +645,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
       rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-collect", signerUrl, summary: intent.summary });
-      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+      return withGasWarning(ctx.conversation.wallet, { intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (args.decreaseTokenId) {
       const built = await buildDecreaseLpTxs({
@@ -603,7 +680,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
       rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-decrease", signerUrl, summary: intent.summary });
-      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+      return withGasWarning(ctx.conversation.wallet, { intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (args.increaseTokenId) {
       if (!args.amountTokenUi) throw new Error("Increase needs amountTokenUi");
@@ -640,7 +717,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
       consumePending(ctx);
       const signerUrl = signerOf(ctx, intent);
       rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-increase", signerUrl, summary: intent.summary });
-      return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+      return withGasWarning(ctx.conversation.wallet, { intentId: intent.id, signerUrl, summary: intent.summary });
     }
     if (!args.amountTokenUi && !args.amountQuoteUi && !args.budgetQuoteUi) {
       throw new Error("Mint needs amountTokenUi, amountQuoteUi, or budgetQuoteUi");
@@ -691,7 +768,7 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
     consumePending(ctx);
     const signerUrl = signerOf(ctx, intent);
     rememberCreatedIntent(ctx, { id: intent.id, kind: "lp-mint", signerUrl, summary: intent.summary });
-    return JSON.stringify({ intentId: intent.id, signerUrl, summary: intent.summary });
+    return withGasWarning(ctx.conversation.wallet, { intentId: intent.id, signerUrl, summary: intent.summary });
   }
 
   if (name === "verify_tx") {
@@ -735,22 +812,27 @@ export async function runTool(name: string, rawArgs: string, ctx: ToolCtx): Prom
   }
 
   if (name === "send_termix_offer") {
-    gate(ctx.conversation);
-    if (!ctx.termix || !ctx.agentId) {
-      return JSON.stringify({ error: "termix_not_configured", hint: "Set TERMIX_AGENT_ID and WALLET_KEY to send offers." });
+    if (!ctx.conversation.geoConfirmed) {
+      throw new Error("Geo not confirmed. Ask the user to declare they are not in the US or a restricted region.");
     }
-    const res = await sendConversationOffer(ctx.termix, ctx.conversation.id, {
-      providerAgentId: ctx.agentId,
-      price: String(args.price),
-      currency: "USDC",
-      deliveryDays: 3,
-      scope: String(args.scope),
-      message: args.message ? String(args.message) : undefined,
-      proofMethod: "manual",
-      settlementType: "escrow",
-    });
+    const res = await sendStandardOffer(ctx, args.message ? String(args.message) : undefined);
     ctx.conversations.consumeConfirm(ctx.conversation.id);
-    return JSON.stringify({ ok: true, offer: res });
+    ctx.conversation.userConfirmed = false;
+    return JSON.stringify(res);
+  }
+
+  if (name === "provider_accept_order") {
+    await refreshHireFromTermix(ctx);
+    const res = await acceptFundedOrder(ctx, args.orderId ? String(args.orderId) : undefined);
+    return withGasWarning(ctx.conversation.wallet, { ...res });
+  }
+
+  if (name === "submit_termix_delivery") {
+    await refreshHireFromTermix(ctx);
+    const res = await submitHireDelivery(ctx, args.orderId ? String(args.orderId) : undefined, {
+      confirmEmpty: Boolean(args.confirmEmpty),
+    });
+    return JSON.stringify(res);
   }
 
   throw new Error(`Unknown tool ${name}`);

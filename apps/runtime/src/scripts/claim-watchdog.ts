@@ -8,4 +8,4 @@ import { startOrderWatchdog } from "../watchdog.js";
 loadRepoEnv();
 
 console.log("claimAfterTimeout watchdog starting. Ctrl+C to stop.");
-startOrderWatchdog(30_000);
+startOrderWatchdog(undefined, 30_000);

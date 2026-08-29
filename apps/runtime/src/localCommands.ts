@@ -7,6 +7,7 @@ import {
 } from "@bstocks/chain";
 import { isUserCancel, isUserConfirm } from "@bstocks/risk";
 import type { PendingLp, PendingQuote } from "./conversation.js";
+import { serviceFeeLabel } from "./hire.js";
 import { runTool, type ToolCtx } from "./tools.js";
 
 export type LocalCmd =
@@ -28,6 +29,8 @@ export type LocalCmd =
   | { kind: "decrease"; fractionBps: number }
   | { kind: "confirm" }
   | { kind: "cancel" }
+  | { kind: "hire-offer" }
+  | { kind: "deliver" }
   | { kind: "none" };
 
 const TOK = "[A-Za-z0-9\\u4e00-\\u9fff]+";
@@ -49,8 +52,11 @@ const POSITIONS = /^(?:我的)?(?:仓位|持仓|positions?|my positions?)$/i;
 const DECREASE_FULL = /^(全撤|撤出全部|全部撤出|撤出|withdraw all|exit all|close (?:the )?lp)$/i;
 const DECREASE_HALF = /^(撤一半|减仓一半|撤 50%|withdraw half|exit half)$/i;
 
+const QUOTE_ASSET = "usdc|usdt|usd|wbnb|bnb|u";
+
 function spokenQuoteAsset(raw: string): string {
   const key = raw.toLowerCase();
+  if (key === "usdc") return "USDC";
   if (key === "bnb") return "BNB";
   if (key === "wbnb") return "WBNB";
   return "USDT";
@@ -59,14 +65,14 @@ function spokenQuoteAsset(raw: string): string {
 export function parseBuySell(text: string): PendingQuote | null {
   const t = text.trim();
   const enBuy = t.match(
-    new RegExp(`(?:buy|purchase)\\s+(\\d+(?:\\.\\d+)?)\\s*(usdt|usd|wbnb|bnb|u)\\s*(?:of|worth of)?\\s*(${TOK})`, "i"),
+    new RegExp(`(?:buy|purchase)\\s+(\\d+(?:\\.\\d+)?)\\s*(${QUOTE_ASSET})\\s*(?:of|worth of)?\\s*(${TOK})`, "i"),
   );
   if (enBuy) {
     return { tokenIn: spokenQuoteAsset(enBuy[2]!), tokenOut: enBuy[3]!, amountInUi: enBuy[1]! };
   }
   const enSell = t.match(
     new RegExp(
-      `(?:sell)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:of\\s+)?([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s+(?:for|to)\\s+(u|usdt|usd|wbnb|bnb))?\\s*$`,
+      `(?:sell)\\s+(\\d+(?:\\.\\d+)?)\\s*(?:of\\s+)?([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s+(?:for|to)\\s+(${QUOTE_ASSET}))?\\s*$`,
       "i",
     ),
   );
@@ -79,7 +85,7 @@ export function parseBuySell(text: string): PendingQuote | null {
   }
   const spend = t.match(
     new RegExp(
-      `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd|wbnb|bnb)\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
+      `(?:用)?\\s*(\\d+(?:\\.\\d+)?)\\s*(${QUOTE_ASSET})\\s*(?:买|买入|要买|购入|换|兑)\\s*(?:成|到|得|的)?\\s*(${TOK})`,
       "i",
     ),
   );
@@ -87,14 +93,14 @@ export function parseBuySell(text: string): PendingQuote | null {
     return { tokenIn: spokenQuoteAsset(spend[2]!), tokenOut: spend[3]!, amountInUi: spend[1]! };
   }
   const buy = t.match(
-    new RegExp(`(?:买|买入|要买|购入)\\s*(\\d+(?:\\.\\d+)?)\\s*(u|usdt|usd|wbnb|bnb)\\s*(?:的|得)?\\s*(${TOK})`, "i"),
+    new RegExp(`(?:买|买入|要买|购入)\\s*(\\d+(?:\\.\\d+)?)\\s*(${QUOTE_ASSET})\\s*(?:的|得)?\\s*(${TOK})`, "i"),
   );
   if (buy) {
     return { tokenIn: spokenQuoteAsset(buy[2]!), tokenOut: buy[3]!, amountInUi: buy[1]! };
   }
   const sell = t.match(
     new RegExp(
-      `(?:卖|卖出)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:个|股)?\\s*(?:的)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s*(?:换|成|得)\\s*(u|usdt|usd|wbnb|bnb))?\\s*$`,
+      `(?:卖|卖出)\\s*(\\d+(?:\\.\\d+)?)\\s*(?:个|股)?\\s*(?:的)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:\\s*(?:换|成|得)\\s*(${QUOTE_ASSET}))?\\s*$`,
       "i",
     ),
   );
@@ -348,6 +354,12 @@ export function formatToolReply(raw: string): string {
       signerUrl?: string;
       error?: string;
       message?: string;
+      ok?: boolean;
+      offerId?: string;
+      orderId?: string;
+      txHash?: string;
+      artifactId?: string;
+      gasWarning?: string;
       blockers?: string[];
       display?: string;
       uiPrice?: string;
@@ -398,6 +410,45 @@ export function formatToolReply(raw: string): string {
     }
     if (data.error === "insufficient_balance") {
       return data.message ?? "Insufficient balance.";
+    }
+    if (data.error === "hire_not_ready") {
+      return data.message ?? "Finish the Termix hire (offer + checkout + seller accept) before the signer page.";
+    }
+    if (data.error === "termix_not_configured" || data.error === "no_order") {
+      return data.message ?? (data.error === "no_order" ? "No Termix order yet." : "Termix is not configured on this runtime.");
+    }
+    if (
+      data.error === "delivery_needs_confirm" ||
+      data.error === "hire_in_progress" ||
+      data.error === "order_open" ||
+      data.error === "stale_offer"
+    ) {
+      return data.message ?? data.error;
+    }
+    if (data.ok && data.offerId) {
+      const fee = serviceFeeLabel();
+      return [
+        `Standard offer sent (${fee} service fee in Termix escrow, not a stock purchase).`,
+        "Accept that card and finish checkout. I will accept the order after it is funded, then we can open a signer page.",
+        `Offer ${data.offerId}.`,
+      ].join("\n");
+    }
+    if (data.ok && data.artifactId && data.orderId) {
+      return [
+        `Delivery submitted for order ${data.orderId}.`,
+        `Accept delivery on Termix to release the ${serviceFeeLabel()} escrow.`,
+        data.txHash ? `tx ${data.txHash}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n");
+    }
+    if (data.ok && data.orderId && data.txHash) {
+      return [
+        `Order ${data.orderId} accepted. Send the whitelist token and amount (e.g. 用 0.01 USDC 买英伟达).`,
+        data.gasWarning ?? "",
+      ]
+        .filter(Boolean)
+        .join("\n");
     }
     if (data.kind === "lp-compare" && Array.isArray(data.pools)) {
       if (!data.pools.length) {
@@ -463,6 +514,7 @@ export function formatToolReply(raw: string): string {
         pair.trim(),
         `Signer: ${data.signerUrl}`,
         "Use the bound wallet. Check address, amounts, and raw before signing. To stop, say cancel / 取消, or tap Cancel on the signer page.",
+        data.gasWarning ?? "",
       ]
         .filter(Boolean)
         .join("\n");
@@ -501,9 +553,27 @@ export function cancelPendingTrade(ctx: ToolCtx): string {
   ].join("\n");
 }
 
+function isHireOffer(text: string): boolean {
+  return /^(?:请发(?:标准)?报价|发个(?:标准)?报价|发送(?:标准)?报价|我要这个服务|再来一单|再雇一次|雇你|开始(?:吧|合作)|可以开始了?|就这个(?:服务)?|send (?:the )?(?:standard )?offer|hire you|another hire)$/i.test(
+    text.trim(),
+  );
+}
+
+function isHireDeliver(text: string): boolean {
+  return /^(?:请交付|交报告|提交交付|交付吧|可以交付了|做完了(?:，?请交付)?|没(?:做|有)?(?:交易|广播).{0,6}交付|deliver(?: now|y)?|submit delivery)$/i.test(
+    text.trim(),
+  );
+}
+
+function wantsEmptyDelivery(text: string): boolean {
+  return /没(?:做|有)?(?:交易|广播).{0,8}交付|confirm empty delivery/i.test(text);
+}
+
 export function parseLocalCommand(text: string): LocalCmd {
   const t = text.trim();
   if (isUserCancel(t)) return { kind: "cancel" };
+  if (isHireOffer(t)) return { kind: "hire-offer" };
+  if (isHireDeliver(t)) return { kind: "deliver" };
   if (isUserConfirm(t)) return { kind: "confirm" };
   if (POSITIONS.test(t)) return { kind: "positions" };
   const collect = t.match(COLLECT);
@@ -608,6 +678,28 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
 
   if (cmd.kind === "cancel") {
     return cancelPendingTrade(ctx);
+  }
+
+  if (cmd.kind === "hire-offer") {
+    ctx.conversation.userConfirmed = true;
+    return runTool("send_termix_offer", "{}", ctx);
+  }
+
+  if (cmd.kind === "deliver") {
+    const confirmEmpty = Boolean(ctx.conversation.pendingEmptyDelivery) || wantsEmptyDelivery(text);
+    const raw = await runTool("submit_termix_delivery", JSON.stringify({ confirmEmpty }), ctx);
+    try {
+      const parsed = JSON.parse(raw) as { error?: string };
+      if (parsed.error === "delivery_needs_confirm") {
+        const s = ctx.conversations.get(ctx.conversation.id);
+        s.pendingEmptyDelivery = true;
+        ctx.conversations.save(s);
+        ctx.conversation.pendingEmptyDelivery = true;
+      }
+    } catch {
+      /* plain */
+    }
+    return raw;
   }
 
   if (cmd.kind === "price") {

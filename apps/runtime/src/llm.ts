@@ -8,11 +8,19 @@ import {
   rememberSwapQuote,
   runLocalCommand,
 } from "./localCommands.js";
+import { refreshHireFromTermix, serviceFeeLabel } from "./hire.js";
 import { runTool, TOOL_DEFS, type ToolCtx } from "./tools.js";
 
 type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content?: string; tool_call_id?: string; tool_calls?: any[] };
 
 export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBase: string; llmKey: string; llmModel: string }): Promise<string> {
+  if (ctx.termix) {
+    try {
+      await refreshHireFromTermix(ctx);
+    } catch {
+      /* keep local slots */
+    }
+  }
   const localKind = parseLocalCommand(userText).kind;
   if (localKind === "cancel") {
     const reply = cancelPendingTrade(ctx);
@@ -24,7 +32,11 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
     localKind === "collect" ||
     localKind === "decrease" ||
     localKind === "lp" ||
-    localKind === "lp-compare"
+    localKind === "lp-compare" ||
+    localKind === "quote" ||
+    localKind === "price" ||
+    localKind === "hire-offer" ||
+    localKind === "deliver"
   ) {
     const handled = await runLocalCommand(userText, ctx);
     const reply = formatToolReply(handled ?? "I can't do that step.");
@@ -104,10 +116,18 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
 async function executeConfirm(userText: string, ctx: ToolCtx): Promise<string> {
   try {
     const handled = await runLocalCommand(userText, ctx);
-    return formatToolReply(
-      handled ??
-        "No pending quote. Restate the token and amount, e.g. buy 100 USDT of NVDAB / 用 100 USDT 买英伟达.",
-    );
+    if (handled) return formatToolReply(handled);
+    const phase = ctx.conversation.hirePhase ?? "none";
+    if (ctx.conversation.source === "termix" && (phase === "none" || phase === "quoting")) {
+      return formatToolReply(await runTool("send_termix_offer", "{}", ctx));
+    }
+    if (ctx.conversation.source === "termix" && phase === "offered") {
+      return `The ${serviceFeeLabel()} offer is already out. Accept that card and finish Termix checkout. I will accept the order after it is funded.`;
+    }
+    if (ctx.conversation.source === "termix" && phase === "funded") {
+      return formatToolReply(await runTool("provider_accept_order", "{}", ctx));
+    }
+    return "No pending quote. Restate the token and amount, e.g. buy 100 USDT of NVDAB / 用 100 USDT 买英伟达.";
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }

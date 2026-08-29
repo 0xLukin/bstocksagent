@@ -3,7 +3,7 @@
  * Does NOT broadcast unless --broadcast is passed AND WALLET_KEY is set.
  */
 import { loadRepoEnv } from "@bstocks/chain";
-import { agentByTx, broadcastIntent, fetchContracts, nameAvailability, prepareMint, TermixClient, walletLogin } from "@bstocks/termix";
+import { agentByTx, broadcastIntent, fetchContracts, listOwnedAgents, nameAvailability, prepareMint, TermixClient, walletLogin } from "@bstocks/termix";
 
 loadRepoEnv();
 
@@ -58,9 +58,17 @@ async function main() {
   for (let i = 0; i < 20; i++) {
     await new Promise((r) => setTimeout(r, 3000));
     const st = await agentByTx(client, hash);
-    console.log("indexer", st.status, st.agent?.id);
-    if (st.status === "CONFIRMED" && st.agent?.id) {
-      console.log("Set TERMIX_AGENT_ID=" + st.agent.id);
+    const tokenId = st.agent?.agentTokenId;
+    let platformId = st.agent?.id;
+    if (st.status === "CONFIRMED" && !platformId) {
+      const owned = await listOwnedAgents(client);
+      const items = Array.isArray(owned) ? owned : ((owned as { items?: Array<{ id?: string; agentTokenId?: string; name?: string }> }).items ?? []);
+      const match = items.find((a) => a.agentTokenId === tokenId || a.name === `${HANDLE}.agent` || a.name === HANDLE);
+      platformId = match?.id;
+    }
+    console.log("indexer", st.status, platformId ?? tokenId);
+    if (st.status === "CONFIRMED" && platformId) {
+      console.log("Set TERMIX_AGENT_ID=" + platformId);
       return;
     }
   }

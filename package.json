@@ -21,6 +21,8 @@
     "termix:accept": "pnpm --filter @bstocks/runtime termix:accept",
     "termix:deliver": "pnpm --filter @bstocks/runtime termix:deliver",
     "termix:claim-watch": "pnpm --filter @bstocks/runtime termix:claim-watch",
+    "termix:e2e-hire": "pnpm --filter @bstocks/runtime termix:e2e-hire",
+    "termix:e2e-swap": "pnpm --filter @bstocks/runtime termix:e2e-swap",
     "chat": "pnpm --filter @bstocks/runtime chat"
   },
   "devDependencies": {

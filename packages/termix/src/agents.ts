@@ -30,12 +30,30 @@ export async function prepareMint(
 }
 
 export async function agentByTx(client: TermixClient, txHash: string) {
-  return client.request<{ status: string; agent?: { id: string; name?: string } }>(
-    `/api/v1/agents/by-tx/${txHash}`,
-    { auth: "session" },
-  );
+  return client.request<{
+    status: string;
+    agent?: { id?: string; agentTokenId?: string; name?: string };
+  }>(`/api/v1/agents/by-tx/${txHash}`, { auth: "session" });
 }
 
 export async function listOwnedAgents(client: TermixClient) {
   return client.request<unknown>(`/api/v1/agents`);
+}
+
+export async function getMe(client: TermixClient) {
+  return client.request<Record<string, unknown>>(`/api/v1/me`);
+}
+
+export async function listAccountAgents(client: TermixClient, accountId: string) {
+  return client.request<unknown>(`/api/v1/accounts/${accountId}/agents`);
+}
+
+export type OwnedAgent = { id?: string; agentTokenId?: string; name?: string };
+
+export function unwrapOwnedAgents(raw: unknown): OwnedAgent[] {
+  if (Array.isArray(raw)) return raw as OwnedAgent[];
+  if (raw && typeof raw === "object" && Array.isArray((raw as { items?: unknown[] }).items)) {
+    return (raw as { items: OwnedAgent[] }).items;
+  }
+  return [];
 }

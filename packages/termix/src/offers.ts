@@ -25,3 +25,11 @@ export async function sendConversationOffer(
     }),
   });
 }
+
+export async function withdrawOffer(client: TermixClient, offerId: string) {
+  return client.request(`/api/v1/offers/${offerId}/withdraw`, { method: "POST", body: "{}" });
+}
+
+export async function declineOffer(client: TermixClient, offerId: string) {
+  return client.request(`/api/v1/offers/${offerId}/decline`, { method: "POST", body: "{}" });
+}

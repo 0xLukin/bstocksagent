@@ -174,6 +174,21 @@ describe("parseLocalCommand", () => {
       tokenOut: "NVDAB",
       amountInUi: "100",
     });
+    expect(parseBuySell("用 0.01 USDC 买英伟达")).toEqual({
+      tokenIn: "USDC",
+      tokenOut: "英伟达",
+      amountInUi: "0.01",
+    });
+    expect(parseBuySell("buy 0.01 USDC of NVDAB")).toEqual({
+      tokenIn: "USDC",
+      tokenOut: "NVDAB",
+      amountInUi: "0.01",
+    });
+    expect(parseBuySell("买 0.01 USDC 的英伟达")).toEqual({
+      tokenIn: "USDC",
+      tokenOut: "英伟达",
+      amountInUi: "0.01",
+    });
     expect(parseBuySell("sell 0.5 NVIDIA")).toEqual({
       tokenIn: "NVIDIA",
       tokenOut: "USDT",
@@ -192,6 +207,7 @@ describe("parseLocalCommand", () => {
     });
     expect(text).toContain("100 USDT → NVDAB");
     expect(text).toMatch(/Do not re-ask/);
+    expect(text).toMatch(/not a Termix hire/);
   });
 
   it("tells the model a named APR pool is pending and must not revert to USDT 2500", () => {
@@ -282,6 +298,24 @@ describe("parseLocalCommand", () => {
     );
     expect(text).toContain("NVDAB ≈ 214.4 USDT / share");
     expect(text).toMatch(/1 share|pool mid/i);
+  });
+
+  it("formats hire_not_ready instead of dumping JSON", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        error: "hire_not_ready",
+        hirePhase: "offered",
+        message: "Termix hire is not in working yet.",
+      }),
+    );
+    expect(text).toContain("not in working");
+    expect(text).not.toMatch(/^\s*\{/);
+  });
+
+  it("formats a standard offer receipt", () => {
+    const text = formatToolReply(JSON.stringify({ ok: true, offerId: "off-1" }));
+    expect(text).toContain("Standard offer sent");
+    expect(text).toContain("off-1");
   });
 
   it("formats a signer URL instead of dumping JSON", () => {

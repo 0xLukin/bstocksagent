@@ -1,5 +1,7 @@
 import { issueRuntimeToken, pollInbox, replyA2A, signalThinking, walletLogin, type InboxMessage, TermixClient } from "@bstocks/termix";
+import { getA2AStatus, noteA2A } from "./a2aStatus.js";
 import type { ConversationStore } from "./conversation.js";
+import { acceptFundedOrder, hireEventReply, isSystemHireEvent, refreshHireFromTermix } from "./hire.js";
 import { loadInboxSince, saveInboxSince } from "./inboxCursor.js";
 import { runAgentTurn } from "./llm.js";
 import type { ToolCtx } from "./tools.js";
@@ -24,9 +26,36 @@ export async function startA2APoller(opts: {
   }
 
   const client = new TermixClient();
-  await walletLogin(client);
-  await issueRuntimeToken(client, opts.agentId);
-  console.log(`[a2a] runtime token issued for ${opts.agentId}; polling every ${opts.pollMs}ms`);
+  const ensureAuth = async () => {
+    await walletLogin(client);
+    await issueRuntimeToken(client, opts.agentId);
+    noteA2A({ tokenIssued: true, polling: true, lastError: undefined });
+  };
+
+  for (let i = 0; i < 6; i++) {
+    try {
+      await ensureAuth();
+      break;
+    } catch (err) {
+      const text = err instanceof Error ? err.message : String(err);
+      noteA2A({ tokenIssued: false, polling: false, lastError: text });
+      console.error("[a2a] login/token failed:", text);
+      if (i === 5) {
+        setInterval(() => {
+          void ensureAuth().catch((e) => {
+            noteA2A({ lastError: e instanceof Error ? e.message : String(e) });
+          });
+        }, 30_000);
+      } else {
+        await new Promise((r) => setTimeout(r, 4000));
+      }
+    }
+  }
+  if (getA2AStatus().tokenIssued) {
+    console.log(`[a2a] runtime token issued for ${opts.agentId}; polling every ${opts.pollMs}ms`);
+  } else {
+    console.warn(`[a2a] token not issued yet — retrying login; HTTP /health stays up`);
+  }
 
   let since = loadInboxSince(opts.dataDir);
 
@@ -38,14 +67,22 @@ export async function startA2APoller(opts: {
         if (msg.createdAt > since) since = msg.createdAt;
       }
       saveInboxSince(opts.dataDir, since);
+      noteA2A({
+        lastPollAt: new Date().toISOString(),
+        lastInboxAt: since,
+        lastError: undefined,
+        polling: true,
+      });
     } catch (err) {
       const text = err instanceof Error ? err.message : String(err);
+      noteA2A({ lastError: text, lastPollAt: new Date().toISOString() });
       if (text.includes("401")) {
         try {
-          await walletLogin(client);
-          await issueRuntimeToken(client, opts.agentId);
+          await ensureAuth();
         } catch (e) {
-          console.error("[a2a] reauth failed", e);
+          const re = e instanceof Error ? e.message : String(e);
+          noteA2A({ lastError: re, tokenIssued: false });
+          console.error("[a2a] reauth failed", re);
         }
       } else {
         console.error("[a2a] poll error", text);
@@ -84,6 +121,22 @@ async function handleMessage(
     agentId: opts.agentId,
     dataDir: opts.dataDir,
   };
-  const reply = await runAgentTurn(msg.text ?? "", ctx, opts.llm);
+  await refreshHireFromTermix(ctx);
+  if (ctx.conversation.hirePhase === "funded" && ctx.conversation.lastOrderId) {
+    try {
+      await acceptFundedOrder(ctx, ctx.conversation.lastOrderId);
+    } catch (err) {
+      console.error("[a2a] provider-accept failed", err instanceof Error ? err.message : err);
+    }
+  }
+  const text = msg.text ?? "";
+  if (isSystemHireEvent(text, msg.orderId, msg.kind)) {
+    const reply = hireEventReply(ctx.conversation);
+    opts.conversations.appendTurn(msg.conversationId, "user", text || `[${msg.kind ?? "event"}]`, msg.messageId);
+    opts.conversations.appendTurn(msg.conversationId, "assistant", reply);
+    await replyA2A(termix, msg.conversationId, reply);
+    return;
+  }
+  const reply = await runAgentTurn(text, ctx, opts.llm);
   await replyA2A(termix, msg.conversationId, reply);
 }

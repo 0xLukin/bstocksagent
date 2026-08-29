@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { getAddress, type Address } from "viem";
 import type { CompareLpResult } from "@bstocks/chain";
 import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
-import type { InboxMessage } from "@bstocks/termix";
+import { listingDraft, type InboxMessage } from "@bstocks/termix";
 
 export type PendingQuote = { tokenIn: string; tokenOut: string; amountInUi: string };
 export type PendingLp = {
@@ -30,6 +30,24 @@ export type LastIntent = {
   cancelled?: boolean;
 };
 
+export type HirePhase = "none" | "quoting" | "offered" | "funded" | "working" | "delivered" | "settled";
+
+const HIRE_RANK: Record<HirePhase, number> = {
+  none: 0,
+  quoting: 1,
+  offered: 2,
+  funded: 3,
+  working: 4,
+  delivered: 5,
+  settled: 6,
+};
+
+export function mergeHirePhase(current: HirePhase | undefined, next: HirePhase): HirePhase {
+  if (!current || current === "none") return next;
+  if (next === "none") return "none";
+  return HIRE_RANK[next] >= HIRE_RANK[current] ? next : current;
+}
+
 export type ConversationState = {
   id: string;
   source?: "termix" | "local";
@@ -37,8 +55,13 @@ export type ConversationState = {
   geoConfirmed: boolean;
   userConfirmed: boolean;
   pendingAction?: string;
+  hirePhase?: HirePhase;
   lastOrderId?: string;
+  lastOrderStatus?: string;
+  lastOfferId?: string;
   lastOfferHint?: string;
+  pendingEmptyDelivery?: boolean;
+  lastDueWarnAt?: string;
   lastQuote?: PendingQuote;
   lastLp?: PendingLp;
   lastLpCompare?: CompareLpResult;
@@ -50,6 +73,11 @@ export type ConversationState = {
   preference?: string;
   updatedAt: string;
 };
+
+export function canCreateDefiIntent(state: ConversationState): boolean {
+  if (state.source !== "termix") return true;
+  return state.hirePhase === "working";
+}
 
 const MAX_TURNS = 24;
 const MAX_SEEN = 200;
@@ -107,6 +135,7 @@ export class ConversationStore {
     }
     const s = this.ingestUserText(id, msg.text ?? "");
     s.source = "termix";
+    if (!s.hirePhase || s.hirePhase === "none") s.hirePhase = s.geoConfirmed ? "quoting" : "none";
     if (msg.conversationKind) s.conversationKind = msg.conversationKind;
     if (msg.orderId) s.lastOrderId = msg.orderId;
     if (msg.from) {
@@ -169,6 +198,54 @@ export class ConversationStore {
     if (!s.geoConfirmed && sibling.geoConfirmed) s.geoConfirmed = true;
     if (!s.lastQuote && sibling.lastQuote) s.lastQuote = sibling.lastQuote;
     if (!s.lastIntent && sibling.lastIntent) s.lastIntent = sibling.lastIntent;
+    if (!s.lastOfferId && sibling.lastOfferId) s.lastOfferId = sibling.lastOfferId;
+    if (sibling.hirePhase) s.hirePhase = mergeHirePhase(s.hirePhase, sibling.hirePhase);
+  }
+
+  findByOrderId(orderId: string): ConversationState | undefined {
+    return this.findSiblingByOrder(orderId, "");
+  }
+
+  list(): ConversationState[] {
+    if (!existsSync(this.dir)) return [];
+    const out: ConversationState[] = [];
+    for (const name of readdirSync(this.dir)) {
+      if (!name.endsWith(".json")) continue;
+      out.push(JSON.parse(readFileSync(join(this.dir, name), "utf8")) as ConversationState);
+    }
+    return out;
+  }
+
+  patchHire(
+    id: string,
+    patch: Partial<Pick<ConversationState, "hirePhase" | "lastOfferId" | "lastOrderId" | "lastOrderStatus">>,
+    opts?: { replace?: boolean; clearOrder?: boolean },
+  ) {
+    const s = this.get(id);
+    if (opts?.clearOrder) {
+      delete s.lastOrderId;
+      delete s.lastOrderStatus;
+    }
+    if (patch.lastOfferId) s.lastOfferId = patch.lastOfferId;
+    if (patch.lastOrderId) s.lastOrderId = patch.lastOrderId;
+    if (patch.lastOrderStatus) s.lastOrderStatus = patch.lastOrderStatus;
+    if (patch.hirePhase) {
+      s.hirePhase = opts?.replace ? patch.hirePhase : mergeHirePhase(s.hirePhase, patch.hirePhase);
+    }
+    this.save(s);
+    return s;
+  }
+
+  startNewHire(id: string) {
+    const s = this.get(id);
+    delete s.lastOrderId;
+    delete s.lastOrderStatus;
+    delete s.lastOfferId;
+    delete s.pendingEmptyDelivery;
+    delete s.lastDueWarnAt;
+    s.hirePhase = s.geoConfirmed ? "quoting" : "none";
+    this.save(s);
+    return s;
   }
 
   private findSiblingByOrder(orderId: string, exceptId: string): ConversationState | undefined {
@@ -234,7 +311,10 @@ export function formatRuntimeState(state: ConversationState): string {
             : undefined,
         }
       : undefined,
+    hirePhase: state.hirePhase ?? "none",
     lastOrderId: state.lastOrderId,
+    lastOrderStatus: state.lastOrderStatus,
+    lastOfferId: state.lastOfferId,
     lastIntent: state.lastIntent
       ? { id: state.lastIntent.id, kind: state.lastIntent.kind, signerUrl: state.lastIntent.signerUrl }
       : undefined,
@@ -243,7 +323,13 @@ export function formatRuntimeState(state: ConversationState): string {
     "This is the Termix conversation memory card (persisted by conversationId). Inbox sends only the new message, no history. These slots plus recent turns are the context. Do not treat the user as new.",
     `Conversation state: ${JSON.stringify(snap)}`,
   ];
-  if (state.lastQuote) {
+  lines.push(...hirePhaseLines(state));
+  const defiReady = canCreateDefiIntent(state);
+  if (state.lastQuote && !defiReady && state.source === "termix") {
+    lines.push(
+      `A swap was mentioned (${state.lastQuote.amountInUi} ${state.lastQuote.tokenIn} → ${state.lastQuote.tokenOut}) but hire is not in working yet. Do not create_swap_intent. Finish the Termix offer/checkout/accept first.`,
+    );
+  } else if (state.lastQuote) {
     const q = state.lastQuote;
     lines.push(
       `Pending swap: ${q.amountInUi} ${q.tokenIn} → ${q.tokenOut}. On confirm, call create_swap_intent with these params immediately. Do not re-ask buy vs sell or the amount.`,
@@ -295,4 +381,34 @@ export function formatRuntimeState(state: ConversationState): string {
     lines.push("Geo declaration is done. Do not ask again.");
   }
   return lines.join("\n");
+}
+
+function hirePhaseLines(state: ConversationState): string[] {
+  if (state.source !== "termix") {
+    return [
+      "This is a local /chat session, not a Termix hire. Do not call send_termix_offer, provider_accept_order, or submit_termix_delivery. After geo, quote and create_swap_intent / create_lp_intent on confirm as usual.",
+    ];
+  }
+  const phase = state.hirePhase ?? "none";
+  const draft = listingDraft();
+  const fee = `${draft.basePrice} ${draft.currency}`;
+  const guide: Record<HirePhase, string> = {
+    none: `Termix hire has not started. After geo, explain that ${fee} is the service fee, then send_termix_offer when they ask for the standard quote.`,
+    quoting:
+      `Hire phase quoting. Explain ${fee} escrow is the service fee (not a stock purchase). If they ask for the standard offer / 请发标准报价 / 我要这个服务, call send_termix_offer. Do not create a swap or LP intent yet.`,
+    offered:
+      `Hire phase offered. Do NOT create a swap/LP intent. Tell them to accept the ${fee} offer card and pay Termix checkout. Do not ask what they want to test.`,
+    funded:
+      "Hire phase funded. Call provider_accept_order now. Then ask for the buyer 0x if missing. Do not create a DeFi signer page until accept lands.",
+    working:
+      "Hire phase working. Now quote whitelist DeFi and create_swap_intent / create_lp_intent after confirm. After the user broadcasts (or they ask to deliver), call submit_termix_delivery. Do not submit with confirmEmpty unless they said they want the report with no on-chain trade.",
+    delivered:
+      "Hire phase delivered. Ask the buyer to accept delivery and release escrow. Do not start a new free trading desk. Mention the 48h challenge window.",
+    settled:
+      "Hire phase settled. If they want another guided execution, call send_termix_offer (it will start a new hire). Do not reuse the old orderId.",
+  };
+  const extra = state.lastDueWarnAt
+    ? ["Delivery window is closing. If they are finished or skipping the trade, ask them to 请交付 / 没做交易也交付."]
+    : [];
+  return [guide[phase], ...extra];
 }

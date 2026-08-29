@@ -12,6 +12,8 @@
     "termix:accept": "tsx src/scripts/provider-accept.ts",
     "termix:deliver": "tsx src/scripts/submit-delivery.ts",
     "termix:claim-watch": "tsx src/scripts/claim-watchdog.ts",
+    "termix:e2e-hire": "tsx src/scripts/e2e-hire.ts",
+    "termix:e2e-swap": "tsx src/scripts/e2e-swap.ts",
     "chat": "tsx src/scripts/local-chat.ts"
   },
   "dependencies": {

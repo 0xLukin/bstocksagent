@@ -5,6 +5,8 @@ import { getAddress } from "viem";
 import type { Hex } from "viem";
 import type { ConversationStore } from "./conversation.js";
 import { assertIntentBinding, type IntentStore } from "./intents.js";
+import { getA2AStatus } from "./a2aStatus.js";
+import { serviceFeeLabel } from "./hire.js";
 import { runAgentTurn } from "./llm.js";
 
 export function createApp(
@@ -19,16 +21,33 @@ export function createApp(
   const app = new Hono();
   app.use("*", cors({ origin: "*" }));
 
-  app.get("/health", (c) => c.json({ ok: true, chainId: 56 }));
+  app.get("/health", (c) =>
+    c.json({
+      ok: true,
+      chainId: 56,
+      serviceFee: serviceFeeLabel(),
+      a2a: getA2AStatus(),
+    }),
+  );
 
   app.post("/chat", async (c) => {
     if (!extras?.conversations || !extras.llm) {
       return c.json({ error: "chat_disabled" }, 503);
     }
-    const body = (await c.req.json()) as { conversationId?: string; text?: string };
+    const body = (await c.req.json()) as {
+      conversationId?: string;
+      text?: string;
+      source?: "termix" | "local";
+    };
     const conversationId = body.conversationId ?? "local";
     const text = body.text ?? "";
     extras.conversations.ingestUserText(conversationId, text);
+    if (body.source === "termix") {
+      const s = extras.conversations.get(conversationId);
+      s.source = "termix";
+      if (!s.hirePhase || s.hirePhase === "none") s.hirePhase = s.geoConfirmed ? "quoting" : "none";
+      extras.conversations.save(s);
+    }
     const reply = await runAgentTurn(text, {
       conversation: extras.conversations.get(conversationId),
       conversations: extras.conversations,

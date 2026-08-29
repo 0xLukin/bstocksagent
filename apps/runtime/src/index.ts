@@ -47,7 +47,7 @@ async function main() {
       : "[runtime] LLM unset — rule fallback (set DEEPSEEK_API_KEY)",
   );
 
-  await startA2APoller({
+  startA2APoller({
     conversations,
     intents,
     signerWebUrl: env.signerWebUrl,
@@ -55,8 +55,10 @@ async function main() {
     agentId: env.agentId,
     pollMs: env.pollMs,
     llm: { llmBase: env.llmBase, llmKey: env.llmKey, llmModel: env.llmModel },
+  }).catch((err) => {
+    console.error("[a2a] poller failed to start (HTTP still up):", err instanceof Error ? err.message : err);
   });
-  startOrderWatchdog();
+  startOrderWatchdog(conversations);
 }
 
 main().catch((err) => {

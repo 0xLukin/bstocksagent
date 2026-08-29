@@ -6,5 +6,7 @@ export * from "./a2a.js";
 export * from "./agents.js";
 export * from "./listings.js";
 export * from "./offers.js";
+export * from "./conversations.js";
+export * from "./checkout.js";
 export * from "./orders.js";
 export * from "./broadcast.js";
