@@ -1,6 +1,8 @@
 import {
+  aliasesFor,
   DEFAULT_LP_RANGE_BPS,
   getToken,
+  isWhitelisted,
   pickComparedPool,
   swapAssetSymbol,
   type CompareLpResult,
@@ -40,7 +42,7 @@ const PAIR = new RegExp(
 );
 const PRICE = new RegExp(`(?:价格|price)\\s+(${TOK})(?:\\s*/\\s*(${TOK}))?`, "i");
 const PRICE_LOOSE = new RegExp(
-  `(?:查看|查一下|看看|查下|check|show)?\\s*([A-Za-z0-9\\u4e00-\\u9fff]+?)(?:的)?(?:报价|价格|行情|\\s+(?:price|quote))`,
+  `(?:查看|查一下|看看|查下|查询一下|查询|check|show)?\\s*([A-Za-z]{2,12}|[\\u4e00-\\u9fff]{2,8})(?:的)?(?:报价|价格|行情|\\s+(?:price|quote))`,
   "i",
 );
 const LP = new RegExp(
@@ -348,7 +350,94 @@ function formatAnalyzeLp(raw: string): string {
   }
 }
 
-export function formatToolReply(raw: string): string {
+function chineseAlias(symbol: string): string | undefined {
+  try {
+    return aliasesFor(symbol).find((a) => /[\u4e00-\u9fff]/.test(a));
+  } catch {
+    return undefined;
+  }
+}
+
+function tokenSpoken(symbol: string, name: string | undefined, zh: boolean): string {
+  const cn = chineseAlias(symbol);
+  if (zh) return cn ? `${symbol}（${cn}）` : symbol;
+  const short = name?.replace(/\s*\(bStocks\)\s*/i, "").trim();
+  return short && short !== symbol ? `${symbol} (${short})` : symbol;
+}
+
+function trimUiAmount(ui: string): string {
+  const n = Number(ui);
+  if (!Number.isFinite(n)) return ui;
+  const digits = Math.abs(n) >= 1 ? 4 : 6;
+  return n.toLocaleString("en-US", { maximumFractionDigits: digits, minimumFractionDigits: 0 });
+}
+
+function feePct(fee: number): string {
+  return `${(fee / 10_000).toFixed(2)}%`;
+}
+
+type QuoteTokenJson = { symbol: string; name?: string; kind?: string };
+
+function formatSwapQuote(data: {
+  tokenIn: QuoteTokenJson;
+  tokenOut: QuoteTokenJson;
+  amountInUi: string;
+  amountOutUi: string;
+  fee: number;
+  nativeIn?: boolean;
+  nativeOut?: boolean;
+  hops?: Array<{ tokenIn: string; tokenOut: string; fee: number }>;
+}, zh: boolean): string {
+  const buyingBstock = data.tokenOut.kind === "bstock";
+  const paySym = data.nativeIn ? "BNB" : data.tokenIn.symbol;
+  const getSym = data.nativeOut ? "BNB" : data.tokenOut.symbol;
+  const outLabel = tokenSpoken(data.tokenOut.symbol, data.tokenOut.name, zh);
+  const hop = data.hops?.[0];
+  const poolIn = hop?.tokenIn ?? data.tokenIn.symbol;
+  const poolOut = hop?.tokenOut ?? data.tokenOut.symbol;
+  const poolFee = feePct(hop?.fee ?? data.fee);
+  const payNote = data.nativeIn
+    ? zh
+      ? "（原生 BNB，不是 WBNB）"
+      : " (native BNB, not WBNB)"
+    : "";
+  if (zh) {
+    const title = buyingBstock ? `买入 ${outLabel}` : `卖出 ${tokenSpoken(data.tokenIn.symbol, data.tokenIn.name, true)}`;
+    return [
+      "报价如下：",
+      "",
+      title,
+      `- 支付：${trimUiAmount(data.amountInUi)} ${paySym}${payNote}`,
+      `- 获得：约 ${trimUiAmount(data.amountOutUi)} ${getSym}`,
+      `- 路由：Pancake V3（${poolIn}/${poolOut} ${poolFee} 池）`,
+      "- 滑点：默认 50 bps（上限 80 bps）",
+      "",
+      "风险：",
+      "- bStocks 是证书式敞口，不是直接持股，没有投票权；链上价格可能偏离美股。",
+      "- 非交易时段价差可能更大。",
+      "- 不是投资建议，是否执行由你决定。",
+      "",
+      "看完回复「确认执行」生成签名页。取消回复「取消」。",
+    ].join("\n");
+  }
+  const title = buyingBstock
+    ? `Buy ${outLabel}`
+    : `Sell ${tokenSpoken(data.tokenIn.symbol, data.tokenIn.name, false)}`;
+  return [
+    "Quote:",
+    "",
+    title,
+    `- Pay: ${trimUiAmount(data.amountInUi)} ${paySym}${payNote}`,
+    `- Receive: ~${trimUiAmount(data.amountOutUi)} ${getSym}`,
+    `- Route: Pancake V3 (${poolIn}/${poolOut} ${poolFee})`,
+    "- Slippage: 50 bps default (cap 80 bps)",
+    "",
+    "bStocks are certificate-style exposure, not equity, no voting rights. Off-hours the on-chain price can drift. Not investment advice.",
+    "Reply confirm / 确认执行 for a signer page. Say cancel / 取消 to stop.",
+  ].join("\n");
+}
+
+export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
   try {
     const data = JSON.parse(raw) as {
       signerUrl?: string;
@@ -404,12 +493,44 @@ export function formatToolReply(raw: string): string {
         rangeLabel?: string;
         tokenId?: string;
       };
+      tokenIn?: QuoteTokenJson | string;
+      tokenOut?: QuoteTokenJson | string;
+      amountInUi?: string;
+      amountOutUi?: string;
+      fee?: number;
+      nativeIn?: boolean;
+      nativeOut?: boolean;
+      hops?: Array<{ tokenIn: string; tokenOut: string; fee: number }>;
     };
     if (data.error === "risk_blocked") {
       return ["Risk check failed. No signer page was created.", ...(data.blockers ?? [])].join("\n");
     }
     if (data.error === "insufficient_balance") {
       return data.message ?? "Insufficient balance.";
+    }
+    if (
+      !data.signerUrl &&
+      data.tokenIn &&
+      typeof data.tokenIn === "object" &&
+      data.tokenOut &&
+      typeof data.tokenOut === "object" &&
+      data.amountInUi &&
+      data.amountOutUi &&
+      typeof data.fee === "number"
+    ) {
+      return formatSwapQuote(
+        {
+          tokenIn: data.tokenIn,
+          tokenOut: data.tokenOut,
+          amountInUi: data.amountInUi,
+          amountOutUi: data.amountOutUi,
+          fee: data.fee,
+          nativeIn: data.nativeIn,
+          nativeOut: data.nativeOut,
+          hops: data.hops,
+        },
+        opts?.zh ?? false,
+      );
     }
     if (data.error === "hire_not_ready") {
       return data.message ?? "Finish the Termix hire (offer + checkout + seller accept) before the signer page.";
@@ -595,12 +716,21 @@ export function parseLocalCommand(text: string): LocalCmd {
   }
   const compared = parseCompareLp(t);
   if (compared) return { kind: "lp-compare", token: compared.token };
+  const spokenBuy = parseBuySell(t);
+  if (spokenBuy && isWhitelisted(spokenBuy.tokenIn) && isWhitelisted(spokenBuy.tokenOut)) {
+    return {
+      kind: "quote",
+      tokenIn: spokenBuy.tokenIn,
+      tokenOut: spokenBuy.tokenOut,
+      amountInUi: spokenBuy.amountInUi,
+    };
+  }
   const quote = t.match(PAIR);
-  if (quote) {
+  if (quote && isWhitelisted(quote[1]!) && isWhitelisted(quote[2]!)) {
     return { kind: "quote", tokenIn: quote[1]!, tokenOut: quote[2]!, amountInUi: quote[3]! };
   }
   const price = t.match(PRICE) ?? t.match(PRICE_LOOSE);
-  if (price) {
+  if (price && isWhitelisted(price[1]!)) {
     return { kind: "price", token: price[1]!, quote: price[2] ?? "USDT" };
   }
   const lp = t.match(LP);
@@ -737,11 +867,7 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
       JSON.stringify({ tokenIn: cmd.tokenIn, tokenOut: cmd.tokenOut, amountInUi: cmd.amountInUi }),
       ctx,
     );
-    return [
-      quoted,
-      "",
-      "Read-only quote, not investment advice. Reply confirm / 确认执行 after checking raw vs UI to get a signer link.",
-    ].join("\n");
+    return quoted;
   }
 
   if (cmd.kind === "lp-compare") {

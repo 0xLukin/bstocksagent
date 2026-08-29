@@ -48,14 +48,24 @@ export function createApp(
       if (!s.hirePhase || s.hirePhase === "none") s.hirePhase = s.geoConfirmed ? "quoting" : "none";
       extras.conversations.save(s);
     }
-    const reply = await runAgentTurn(text, {
-      conversation: extras.conversations.get(conversationId),
-      conversations: extras.conversations,
-      intents,
-      signerWebUrl: extras.signerWebUrl ?? "http://127.0.0.1:3000",
-      dataDir: extras.dataDir ?? ".data",
-    }, extras.llm);
-    return c.json({ reply, state: extras.conversations.get(conversationId) });
+    try {
+      const reply = await runAgentTurn(
+        text,
+        {
+          conversation: extras.conversations.get(conversationId),
+          conversations: extras.conversations,
+          intents,
+          signerWebUrl: extras.signerWebUrl ?? "http://127.0.0.1:3000",
+          dataDir: extras.dataDir ?? ".data",
+        },
+        extras.llm,
+      );
+      return c.json({ reply, state: extras.conversations.get(conversationId) });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[chat]", message);
+      return c.json({ error: message, reply: message }, 500);
+    }
   });
 
   app.get("/intents/:id", (c) => {

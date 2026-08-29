@@ -131,6 +131,18 @@ describe("parseLocalCommand", () => {
       token: "英伟达",
       quote: "USDT",
     });
+    expect(parseLocalCommand("查询一下nvdab的报价")).toEqual({
+      kind: "price",
+      token: "nvdab",
+      quote: "USDT",
+    });
+    expect(parseLocalCommand("需要新的报价")).toEqual({ kind: "none" });
+    expect(parseLocalCommand("需要新的报价 我要用0.01 bnb 买 nvdab")).toEqual({
+      kind: "quote",
+      tokenIn: "BNB",
+      tokenOut: "nvdab",
+      amountInUi: "0.01",
+    });
   });
 
   it("ignores unrelated text", () => {
@@ -327,6 +339,31 @@ describe("parseLocalCommand", () => {
     );
     expect(text).toContain("http://127.0.0.1:3000/t/abc");
     expect(text).toContain("100 USDT → ~0.46 NVDAB");
+    expect(text).not.toMatch(/^\s*\{/);
+  });
+
+  it("formats a swap quote as spoken Chinese, not JSON", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        tokenIn: { symbol: "WBNB", name: "Wrapped BNB", kind: "gas" },
+        tokenOut: { symbol: "NVDAB", name: "NVIDIA (bStocks)", kind: "bstock" },
+        amountInUi: "0.01",
+        amountOutUi: "0.03138068",
+        fee: 2500,
+        nativeIn: true,
+        nativeOut: false,
+        hops: [{ tokenIn: "WBNB", tokenOut: "NVDAB", fee: 2500 }],
+        reminder: "raw dump should not appear",
+        amountInRaw: "10000000000000000",
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("买入 NVDAB（英伟达）");
+    expect(text).toContain("0.01 BNB");
+    expect(text).toContain("原生 BNB");
+    expect(text).toContain("0.25%");
+    expect(text).toContain("确认执行");
+    expect(text).not.toContain("amountInRaw");
     expect(text).not.toMatch(/^\s*\{/);
   });
 });

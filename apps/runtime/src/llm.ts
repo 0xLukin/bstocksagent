@@ -13,6 +13,10 @@ import { runTool, TOOL_DEFS, type ToolCtx } from "./tools.js";
 
 type ChatMsg = { role: "system" | "user" | "assistant" | "tool"; content?: string; tool_call_id?: string; tool_calls?: any[] };
 
+function preferZh(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text);
+}
+
 export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBase: string; llmKey: string; llmModel: string }): Promise<string> {
   if (ctx.termix) {
     try {
@@ -38,10 +42,16 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
     localKind === "hire-offer" ||
     localKind === "deliver"
   ) {
-    const handled = await runLocalCommand(userText, ctx);
-    const reply = formatToolReply(handled ?? "I can't do that step.");
-    recordTurns(ctx, userText, reply);
-    return reply;
+    try {
+      const handled = await runLocalCommand(userText, ctx);
+      const reply = formatToolReply(handled ?? "I can't do that step.", { zh: preferZh(userText) });
+      recordTurns(ctx, userText, reply);
+      return reply;
+    } catch (err) {
+      const reply = err instanceof Error ? err.message : String(err);
+      recordTurns(ctx, userText, reply);
+      return reply;
+    }
   }
 
   const remembered = parseBuySell(userText);
@@ -114,18 +124,25 @@ export async function runAgentTurn(userText: string, ctx: ToolCtx, env: { llmBas
 }
 
 async function executeConfirm(userText: string, ctx: ToolCtx): Promise<string> {
+  if (!ctx.conversation.geoConfirmed) {
+    return [
+      "单独回「确认」是执行报价，不是过地区门槛。",
+      "请完整回复：我确认不在美国及受限地区",
+      'or: I confirm I am not in the United States or a restricted region',
+    ].join("\n");
+  }
   try {
     const handled = await runLocalCommand(userText, ctx);
-    if (handled) return formatToolReply(handled);
+    if (handled) return formatToolReply(handled, { zh: preferZh(userText) });
     const phase = ctx.conversation.hirePhase ?? "none";
     if (ctx.conversation.source === "termix" && (phase === "none" || phase === "quoting")) {
-      return formatToolReply(await runTool("send_termix_offer", "{}", ctx));
+      return formatToolReply(await runTool("send_termix_offer", "{}", ctx), { zh: preferZh(userText) });
     }
     if (ctx.conversation.source === "termix" && phase === "offered") {
       return `The ${serviceFeeLabel()} offer is already out. Accept that card and finish Termix checkout. I will accept the order after it is funded.`;
     }
     if (ctx.conversation.source === "termix" && phase === "funded") {
-      return formatToolReply(await runTool("provider_accept_order", "{}", ctx));
+      return formatToolReply(await runTool("provider_accept_order", "{}", ctx), { zh: preferZh(userText) });
     }
     return "No pending quote. Restate the token and amount, e.g. buy 100 USDT of NVDAB / 用 100 USDT 买英伟达.";
   } catch (err) {
@@ -152,7 +169,7 @@ async function fallbackWithoutLlm(userText: string, ctx: ToolCtx): Promise<strin
   }
   try {
     const handled = await runLocalCommand(userText, ctx);
-    if (handled) return formatToolReply(handled);
+    if (handled) return formatToolReply(handled, { zh: preferZh(userText) });
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
