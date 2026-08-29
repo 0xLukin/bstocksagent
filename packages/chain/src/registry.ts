@@ -180,6 +180,39 @@ export function isWhitelisted(symbolOrAddress: string): boolean {
   }
 }
 
+const LP_QUOTE_SYMBOLS = new Set(["USDT", "USDC", "WBNB"]);
+
+/** Longest whitelist alias found in messy speech (skips quote assets). */
+export function findWhitelistedTokenInText(text: string): string | undefined {
+  const hay = text.normalize("NFKC").toLowerCase();
+  let best: { symbol: string; len: number } | undefined;
+  for (const t of listTokens()) {
+    if (LP_QUOTE_SYMBOLS.has(t.symbol)) continue;
+    const names = new Set<string>([t.symbol, t.name, ...aliasesFor(t.symbol)]);
+    for (const n of names) {
+      if (n.length < 2) continue;
+      const needle = n.toLowerCase();
+      if (!hay.includes(needle)) continue;
+      if (!best || needle.length > best.len) best = { symbol: t.symbol, len: needle.length };
+    }
+  }
+  return best?.symbol;
+}
+
+/** Peel 的lp / trailing particles, then alias-match. */
+export function resolveSpokenBstock(raw: string): TokenRecord {
+  const peeled = raw
+    .trim()
+    .replace(/的(?=lp|pool|池)/gi, "")
+    .replace(/(?:的)?(?:lp|pool|流动性|池子?)\s*$/i, "")
+    .replace(/[的之]$/u, "")
+    .trim();
+  if (peeled && isWhitelisted(peeled)) return getToken(peeled);
+  const found = findWhitelistedTokenInText(raw) ?? (peeled ? findWhitelistedTokenInText(peeled) : undefined);
+  if (found) return getToken(found);
+  throw new Error(`Token not on whitelist: ${raw}`);
+}
+
 export function listTokens(): TokenRecord[] {
   const seen = new Set<string>();
   const out: TokenRecord[] = [];

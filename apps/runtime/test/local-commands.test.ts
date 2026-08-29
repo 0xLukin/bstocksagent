@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
-import { formatRuntimeState } from "../src/conversation.js";
+import { formatRuntimeState, nextConfirmKind } from "../src/conversation.js";
 import {
+  bypassLlm,
   formatToolReply,
   parseAddLp,
   parseBuySell,
   parseCompareLp,
   parseLocalCommand,
   parseSpokenFee,
+  rememberLp,
 } from "../src/localCommands.js";
+import type { ToolCtx } from "../src/tools.js";
 
 describe("parseLocalCommand", () => {
   it("parses a swap quote", () => {
@@ -24,6 +27,11 @@ describe("parseLocalCommand", () => {
     expect(parseLocalCommand("确定")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("我确认")).toEqual({ kind: "confirm" });
     expect(parseLocalCommand("confirm")).toEqual({ kind: "confirm" });
+    expect(parseLocalCommand("继续")).toEqual({ kind: "proceed" });
+    expect(parseLocalCommand("签完了")).toEqual({ kind: "proceed" });
+    expect(parseLocalCommand("next step")).toEqual({ kind: "proceed" });
+    expect(parseLocalCommand("已完成 继续")).toEqual({ kind: "proceed" });
+    expect(parseLocalCommand("已完成")).toEqual({ kind: "proceed" });
   });
 
   it("parses spoken 100u NVIDIA LP as a pending mint", () => {
@@ -87,6 +95,18 @@ describe("parseLocalCommand", () => {
     });
   });
 
+  it("parses 组LP as an open-ended propose, not confirm", () => {
+    expect(parseAddLp("组LP")).toEqual({ token: "" });
+    expect(parseLocalCommand("组 LP")).toEqual({ kind: "lp", token: "" });
+    expect(parseAddLp("帮我组个英伟达lp")).toMatchObject({ token: "英伟达" });
+    expect(parseAddLp("我想组nvdab的lp 帮我规划最优方案")).toMatchObject({ token: "nvdab" });
+    expect(parseLocalCommand("我想组nvdab的lp 帮我规划最优方案")).toMatchObject({
+      kind: "lp",
+      token: "nvdab",
+    });
+    expect(parseLocalCommand("确认")).toEqual({ kind: "confirm" });
+  });
+
   it("parses LP APR questions as compare, not price", () => {
     expect(parseCompareLp("英伟达目前最高apr收益的lp是哪个")).toEqual({ token: "英伟达" });
     expect(parseLocalCommand("英伟达最高apr能到多少")).toEqual({ kind: "lp-compare", token: "英伟达" });
@@ -99,10 +119,18 @@ describe("parseLocalCommand", () => {
   it("parses position management", () => {
     expect(parseLocalCommand("my positions")).toEqual({ kind: "positions" });
     expect(parseLocalCommand("我的仓位")).toEqual({ kind: "positions" });
+    expect(parseLocalCommand("看看仓位")).toEqual({ kind: "positions" });
+    expect(parseLocalCommand("看看我的仓位")).toEqual({ kind: "positions" });
     expect(parseLocalCommand("收手续费")).toEqual({ kind: "collect" });
+    expect(parseLocalCommand("帮我领取手续费")).toEqual({ kind: "collect" });
     expect(parseLocalCommand("收手续费 12345")).toEqual({ kind: "collect", tokenId: "12345" });
     expect(parseLocalCommand("全撤")).toEqual({ kind: "decrease", fractionBps: 10_000 });
     expect(parseLocalCommand("撤一半")).toEqual({ kind: "decrease", fractionBps: 5_000 });
+    expect(parseLocalCommand("赎回")).toEqual({ kind: "decrease", fractionBps: 10_000 });
+    expect(parseLocalCommand("退出全部仓位")).toEqual({ kind: "decrease", fractionBps: 10_000 });
+    expect(parseLocalCommand("帮我把 NVDAB 的lp 仓位赎回")).toEqual({ kind: "decrease", fractionBps: 10_000 });
+    expect(parseLocalCommand("帮我把nvdab的lp仓位赎回")).toEqual({ kind: "decrease", fractionBps: 10_000 });
+    expect(parseLocalCommand("组 LP").kind).toBe("lp");
   });
 
   it("parses cancel", () => {
@@ -143,6 +171,21 @@ describe("parseLocalCommand", () => {
       tokenOut: "nvdab",
       amountInUi: "0.01",
     });
+  });
+
+  it("sends spoken quotes to the LLM when a key is present", () => {
+    expect(bypassLlm("quote", true)).toBe(false);
+    expect(bypassLlm("price", true)).toBe(false);
+    expect(bypassLlm("lp", true)).toBe(false);
+    expect(bypassLlm("lp-compare", true)).toBe(false);
+    expect(bypassLlm("confirm", true)).toBe(true);
+    expect(bypassLlm("proceed", true)).toBe(true);
+    expect(bypassLlm("cancel", true)).toBe(true);
+    expect(bypassLlm("decrease", true)).toBe(true);
+    expect(bypassLlm("collect", true)).toBe(true);
+    expect(bypassLlm("positions", true)).toBe(true);
+    expect(bypassLlm("quote", false)).toBe(true);
+    expect(bypassLlm("none", true)).toBe(false);
   });
 
   it("ignores unrelated text", () => {
@@ -206,6 +249,17 @@ describe("parseLocalCommand", () => {
       tokenOut: "USDT",
       amountInUi: "0.5",
     });
+    expect(parseBuySell("全部USDT买英伟达")).toEqual({
+      tokenIn: "USDT",
+      tokenOut: "英伟达",
+      amountInUi: "all",
+    });
+    expect(parseLocalCommand("全部 USDT 买英伟达")).toEqual({
+      kind: "quote",
+      tokenIn: "USDT",
+      tokenOut: "英伟达",
+      amountInUi: "all",
+    });
   });
 
   it("tells the model to execute lastQuote instead of re-asking", () => {
@@ -220,6 +274,66 @@ describe("parseLocalCommand", () => {
     expect(text).toContain("100 USDT → NVDAB");
     expect(text).toMatch(/Do not re-ask/);
     expect(text).toMatch(/not a Termix hire/);
+  });
+
+  it("clears a leftover two-step plan when remembering a withdraw", () => {
+    const conversation: {
+      id: string;
+      lastQuote?: { tokenIn: string; tokenOut: string; amountInUi: string };
+      pendingPlan?: unknown;
+      lastLpProposal?: unknown;
+      lastLp?: { token: string; decreaseTokenId?: string; decreaseBps?: number };
+    } = {
+      id: "local",
+      lastQuote: { tokenIn: "BNB", tokenOut: "USDT", amountInUi: "0.01" },
+      pendingPlan: {
+        kind: "swap_then_lp" as const,
+        phase: "swap" as const,
+        swap: { tokenIn: "BNB", tokenOut: "USDT", amountInUi: "0.01" },
+        lp: { token: "NVDAB", quote: "USDT", fee: 10000, budgetQuoteUi: "8" },
+      },
+      lastLpProposal: {
+        kind: "lp-propose" as const,
+        token: "NVDAB",
+        balances: { token: "1", usdt: "0", bnb: "0.1" },
+        options: [{ n: 1, action: "fund" as const, title: "x", token: "NVDAB", quote: "USDT", fee: 10000, feeLabel: "1%", apr24hPct: 0, needTokenUi: "1", needQuoteUi: "8", note: "" }],
+      },
+    };
+    rememberLp(
+      {
+        conversation,
+        conversations: { save: () => undefined },
+      } as unknown as ToolCtx,
+      { token: "NVDAB", decreaseTokenId: "7277622", decreaseBps: 10_000 },
+    );
+    expect(conversation.pendingPlan).toBeUndefined();
+    expect(conversation.lastQuote).toBeUndefined();
+    expect(conversation.lastLpProposal).toBeUndefined();
+    expect(conversation.lastLp).toMatchObject({ decreaseTokenId: "7277622", decreaseBps: 10_000 });
+    expect(nextConfirmKind(conversation as never)).toBe("none");
+  });
+
+  it("tells the model a pending withdraw must execute on confirm, not replay lastSettled", () => {
+    const text = formatRuntimeState({
+      id: "local",
+      geoConfirmed: true,
+      userConfirmed: false,
+      wallet: "0x3e01a5779cfa830794dbb9c8673a61b3c5c5608a",
+      lastLp: { token: "NVDAB", decreaseTokenId: "7277622", decreaseBps: 10_000 },
+      lastSettled: {
+        kind: "lp-mint",
+        intentId: "lp-1",
+        at: new Date().toISOString(),
+        txHashes: ["0xabc"],
+        pair: "NVDAB/USDT",
+        tokenId: "7277622",
+        message: "LP 已上链。仓位 NFT #7277622（NVDAB/USDT）。",
+      },
+      updatedAt: new Date().toISOString(),
+    });
+    expect(text).toContain("Pending withdraw: NFT #7277622");
+    expect(text).toMatch(/bare 确认 is NOT this settlement/i);
+    expect(text).toMatch(/赎回/);
   });
 
   it("tells the model a named APR pool is pending and must not revert to USDT 2500", () => {
@@ -340,6 +454,15 @@ describe("parseLocalCommand", () => {
     expect(text).toContain("http://127.0.0.1:3000/t/abc");
     expect(text).toContain("100 USDT → ~0.46 NVDAB");
     expect(text).not.toMatch(/^\s*\{/);
+    const zh = formatToolReply(
+      JSON.stringify({
+        signerUrl: "http://127.0.0.1:3000/t/abc",
+        summary: { tokenIn: "BNB", tokenOut: "NVDAB", amountInUi: "0.01", amountOutUi: "0.03" },
+      }),
+      { zh: true },
+    );
+    expect(zh).toContain("签名页已生成");
+    expect(zh).toContain("签名链接：");
   });
 
   it("formats a swap quote as spoken Chinese, not JSON", () => {
@@ -365,6 +488,121 @@ describe("parseLocalCommand", () => {
     expect(text).toContain("确认执行");
     expect(text).not.toContain("amountInRaw");
     expect(text).not.toMatch(/^\s*\{/);
+  });
+
+  it("formats a swap-then-lp plan in Chinese", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        kind: "swap_then_lp",
+        phase: "swap",
+        swap: { tokenIn: "BNB", tokenOut: "USDT", amountInUi: "0.007" },
+        amountOutUi: "4.8",
+        lp: { token: "NVDAB", quote: "USDT", fee: 10000, budgetQuoteUi: "10" },
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("分两步");
+    expect(text).toContain("0.007 BNB");
+    expect(text).toContain("NVDAB/USDT");
+    expect(text).toContain("不用去交易所补");
+  });
+
+  it("formats numbered LP options", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        kind: "lp-propose",
+        token: "NVDAB",
+        balances: { token: "0.03", usdt: "0", bnb: "0.11" },
+        options: [
+          {
+            n: 1,
+            action: "mint",
+            title: "NVDAB/USDT 1% · 用现有余额",
+            note: "现在就能组：约 0.01 NVDAB + 2 USDT。",
+          },
+          {
+            n: 2,
+            action: "fund",
+            title: "NVDAB/USDT 1% · 先用 BNB 补 USDT",
+            note: "USDT 还差约 5。用 0.007 BNB 换成约 5 USDT，再组 LP。",
+          },
+        ],
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("回复数字选方案");
+    expect(text).toContain("1. NVDAB/USDT 1% · 用现有余额");
+    expect(text).toContain("先用 BNB 补 USDT");
+    expect(text).not.toContain("http://");
+  });
+
+  it("mentions step 2 when the swap signer parks an LP", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        signerUrl: "http://127.0.0.1:3000/t/abc",
+        summary: {
+          tokenIn: "BNB",
+          tokenOut: "USDT",
+          amountInUi: "0.01168",
+          amountOutUi: "8.01",
+          parkedLp: { token: "NVDAB", quote: "USDT", fee: 10000, budgetQuoteUi: "8" },
+        },
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("0.01168 BNB");
+    expect(text).toContain("签完了");
+    expect(text).toContain("两步");
+  });
+
+  it("formats a settled LP without a signer page", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        kind: "lp-settled",
+        message: "LP 已上链。仓位 NFT #99（NVDAB/USDT）。不是投资建议。可以说「我的仓位」查看。",
+        tokenId: "99",
+        pair: "NVDAB/USDT",
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("NFT #99");
+    expect(text).not.toContain("{");
+  });
+
+  it("labels a withdraw signer page as 退出仓位, not a new mint", () => {
+    const text = formatToolReply(
+      JSON.stringify({
+        signerUrl: "http://127.0.0.1:3000/t/dec",
+        summary: {
+          tokenId: "7277622",
+          token0: "NVDAB",
+          token1: "USDT",
+          amount0Ui: "0.018",
+          amount1Ui: "4.05",
+          decreaseBps: 10000,
+          burn: true,
+        },
+      }),
+      { zh: true },
+    );
+    expect(text).toContain("退出仓位");
+    expect(text).toContain("http://127.0.0.1:3000/t/dec");
+    expect(text).toContain("#7277622");
+  });
+});
+
+describe("parseLpOptionNumber", () => {
+  it("parses 1/2/方案一", async () => {
+    const { parseLpPick, lpPickWantsExecute } = await import("../src/lpPropose.js");
+    expect(parseLpPick("1")).toBe(1);
+    expect(parseLpPick("方案2")).toBe(2);
+    expect(parseLpPick("第一个")).toBe(1);
+    expect(parseLpPick("确认方案1")).toBe(1);
+    expect(parseLpPick("确认 2")).toBe(2);
+    expect(parseLpPick("确认")).toBeNull();
+    expect(lpPickWantsExecute("1")).toBe(false);
+    expect(lpPickWantsExecute("方案1")).toBe(false);
+    expect(lpPickWantsExecute("确认方案1")).toBe(true);
   });
 });
 

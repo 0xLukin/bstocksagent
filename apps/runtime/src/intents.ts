@@ -18,6 +18,11 @@ export type StoredIntent = {
   risks: string[];
   simulation: { ok: boolean; notes: string[] };
   txHashes: Hex[];
+  /** Set after a swap-then-lp funding swap is filled: the LP signer URL. */
+  followUpSignerUrl?: string;
+  followUpError?: string;
+  /** After an LP mint is fully broadcast: human note for the signer page and chat. */
+  settledNote?: string;
 };
 
 export function assertIntentBinding(intent: StoredIntent, connected: string): void {
@@ -107,6 +112,20 @@ export class IntentStore {
     if (!intent) throw new Error("intent not found");
     assertIntentBinding(intent, connected);
     if (!intent.txHashes.includes(hash)) intent.txHashes.push(hash);
+    writeFileSync(this.file(id), JSON.stringify(intent, null, 2));
+    return intent;
+  }
+
+  patch(
+    id: string,
+    fields: Partial<Pick<StoredIntent, "followUpSignerUrl" | "followUpError" | "settledNote">>,
+  ): StoredIntent | undefined {
+    const intent = this.get(id);
+    if (!intent) return undefined;
+    if (fields.followUpSignerUrl !== undefined) intent.followUpSignerUrl = fields.followUpSignerUrl;
+    if (fields.followUpError !== undefined) intent.followUpError = fields.followUpError;
+    if (fields.settledNote !== undefined) intent.settledNote = fields.settledNote;
+    if (fields.followUpSignerUrl) delete intent.followUpError;
     writeFileSync(this.file(id), JSON.stringify(intent, null, 2));
     return intent;
   }

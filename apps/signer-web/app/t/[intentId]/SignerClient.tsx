@@ -25,6 +25,9 @@ export function SignerClient({ intentId }: { intentId: string }) {
   const [error, setError] = useState<string>("");
   const [log, setLog] = useState<string[]>([]);
   const [cancelling, setCancelling] = useState(false);
+  const [followUpUrl, setFollowUpUrl] = useState("");
+  const [followUpError, setFollowUpError] = useState("");
+  const [settledNote, setSettledNote] = useState("");
   const [sim, setSim] = useState<LiveSim>({ status: "running", notes: [] });
   const { address, isConnected, chainId } = useAccount();
   const { connect, connectors, isPending } = useConnect();
@@ -53,6 +56,76 @@ export function SignerClient({ intentId }: { intentId: string }) {
   useEffect(() => {
     if (view) document.title = view.title;
   }, [view]);
+
+  const cancelled = Boolean(intent?.cancelledAt);
+  const fullyBroadcast = Boolean(intent && intent.txs.length > 0 && hashesReady(intent, log));
+
+  useEffect(() => {
+    if (!intent || !fullyBroadcast || cancelled) return;
+    if (intent.kind !== "swap") return;
+    if (intent.followUpSignerUrl) {
+      setFollowUpUrl(intent.followUpSignerUrl);
+      return;
+    }
+    let stop = false;
+    let n = 0;
+    const tick = () => {
+      if (stop) return;
+      void fetchIntent(intentId)
+        .then((latest) => {
+          if (stop) return;
+          if (latest.followUpSignerUrl) {
+            setFollowUpUrl(latest.followUpSignerUrl);
+            setFollowUpError("");
+            return;
+          }
+          if (latest.followUpError) {
+            setFollowUpError(latest.followUpError);
+            return;
+          }
+          n += 1;
+          if (n < 45) window.setTimeout(tick, 2000);
+        })
+        .catch((e: Error) => {
+          if (!stop) setFollowUpError(e.message);
+        });
+    };
+    tick();
+    return () => {
+      stop = true;
+    };
+  }, [fullyBroadcast, cancelled, intent, intentId]);
+
+  useEffect(() => {
+    if (!intent || !fullyBroadcast || cancelled) return;
+    if (!intent.kind.startsWith("lp")) return;
+    if (intent.settledNote) {
+      setSettledNote(intent.settledNote);
+      return;
+    }
+    let stop = false;
+    let n = 0;
+    const tick = () => {
+      if (stop) return;
+      void fetchIntent(intentId)
+        .then((latest) => {
+          if (stop) return;
+          if (latest.settledNote) {
+            setSettledNote(latest.settledNote);
+            return;
+          }
+          n += 1;
+          if (n < 30) window.setTimeout(tick, 2000);
+        })
+        .catch(() => {
+          /* agent will still pick up via 签完了 */
+        });
+    };
+    tick();
+    return () => {
+      stop = true;
+    };
+  }, [fullyBroadcast, cancelled, intent, intentId]);
 
   useEffect(() => {
     if (!intent || intent.cancelledAt) return;
@@ -131,8 +204,6 @@ export function SignerClient({ intentId }: { intentId: string }) {
     return <div className="card muted">Loading this intent…</div>;
   }
 
-  const cancelled = Boolean(intent.cancelledAt);
-  const fullyBroadcast = intent.txs.length > 0 && hashesReady(intent, log);
   const wrongWallet = isConnected && !boundOk;
   const wrongChain = Boolean(chainId && chainId !== 56);
   const simBlocked = sim.status === "fail";
@@ -260,6 +331,19 @@ export function SignerClient({ intentId }: { intentId: string }) {
             </a>
           ))}
         </div>
+      )}
+
+      {fullyBroadcast && !cancelled && intent.kind.startsWith("lp") && (
+        <p className="guard">{settledNote || "LP transactions broadcast. The agent will record the position."}</p>
+      )}
+      {fullyBroadcast && !cancelled && !followUpUrl && !followUpError && intent.kind === "swap" && (
+        <p className="guard">Preparing the next signer page (LP mint)…</p>
+      )}
+      {followUpError && <p className="banner warn">{followUpError}</p>}
+      {followUpUrl && (
+        <button type="button" className="primary" onClick={() => { window.location.href = followUpUrl; }}>
+          Step 1 is on-chain. Open step 2 (LP mint)
+        </button>
       )}
 
       <details className="advanced">

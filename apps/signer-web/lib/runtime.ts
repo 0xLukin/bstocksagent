@@ -30,6 +30,9 @@ export type RemoteIntent = {
   txHashes: string[];
   conversationId?: string;
   cancelledAt?: string;
+  followUpSignerUrl?: string;
+  followUpError?: string;
+  settledNote?: string;
 };
 
 export async function fetchIntent(id: string): Promise<RemoteIntent> {

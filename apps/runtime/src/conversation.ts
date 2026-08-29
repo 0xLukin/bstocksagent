@@ -4,6 +4,7 @@ import { getAddress, type Address } from "viem";
 import type { CompareLpResult } from "@bstocks/chain";
 import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
 import { listingDraft, type InboxMessage } from "@bstocks/termix";
+import type { LpProposal } from "./lpPropose.js";
 
 export type PendingQuote = { tokenIn: string; tokenOut: string; amountInUi: string };
 export type PendingLp = {
@@ -18,9 +19,104 @@ export type PendingLp = {
   increaseTokenId?: string;
   decreaseTokenId?: string;
   decreaseBps?: number;
+  /** Set when the user picked a numbered option or stated an explicit size this turn. Leftover lastLp after restart is not committed. */
+  committed?: boolean;
 };
 
+/** Swap the missing LP leg first; mint after that swap is signed. */
+export type PendingPlan = {
+  kind: "swap_then_lp";
+  phase: "swap" | "lp";
+  swap: PendingQuote;
+  lp: PendingLp;
+  swapIntentId?: string;
+};
+
+export function parkedMint(lp?: PendingLp): boolean {
+  if (!lp) return false;
+  if (lp.collectTokenId || lp.decreaseTokenId || lp.increaseTokenId) return false;
+  if (lp.budgetQuoteUi || lp.amountTokenUi || lp.amountQuoteUi) return true;
+  return Boolean(lp.token && (lp.quote || lp.fee != null));
+}
+
+export function isFundingSwapForLp(swap?: PendingQuote, lp?: PendingLp): boolean {
+  if (!swap || !parkedMint(lp)) return false;
+  const inn = swap.tokenIn.toUpperCase();
+  const out = swap.tokenOut.toUpperCase();
+  const quote = (lp!.quote ?? "USDT").toUpperCase();
+  if (!(inn === "BNB" || inn === "WBNB")) return false;
+  return out === quote || (quote === "WBNB" && (out === "BNB" || out === "WBNB"));
+}
+
+/** If a funding swap and an LP mint are both in memory, persist them as one two-step plan. */
+export function latchSwapThenLpPlan(state: ConversationState, swap: PendingQuote, lp: PendingLp): boolean {
+  if (!isFundingSwapForLp(swap, lp)) return false;
+  const prev = state.pendingPlan?.kind === "swap_then_lp" ? state.pendingPlan : undefined;
+  state.lastQuote = swap;
+  state.lastLp = lp;
+  state.pendingPlan = {
+    kind: "swap_then_lp",
+    phase: prev?.phase === "lp" ? "lp" : "swap",
+    swap,
+    lp,
+    swapIntentId: prev?.swapIntentId,
+  };
+  return true;
+}
+
+export function nextConfirmKind(state: ConversationState): "swap" | "lp" | "none" {
+  if (state.pendingPlan?.kind === "swap_then_lp") {
+    return state.pendingPlan.phase === "lp" ? "lp" : "swap";
+  }
+  if (isFundingSwapForLp(state.lastQuote, state.lastLp)) return "swap";
+  return "none";
+}
+
+export function parseParkedLp(raw: unknown): PendingLp | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, unknown>;
+  if (typeof o.token !== "string" || !o.token) return undefined;
+  const lp: PendingLp = { token: o.token };
+  if (typeof o.quote === "string") lp.quote = o.quote;
+  if (typeof o.amountTokenUi === "string") lp.amountTokenUi = o.amountTokenUi;
+  if (typeof o.amountQuoteUi === "string") lp.amountQuoteUi = o.amountQuoteUi;
+  if (typeof o.budgetQuoteUi === "string") lp.budgetQuoteUi = o.budgetQuoteUi;
+  if (typeof o.rangeBps === "number") lp.rangeBps = o.rangeBps;
+  if (typeof o.fee === "number") lp.fee = o.fee;
+  return parkedMint(lp) ? lp : undefined;
+}
+
 export type ChatTurn = { role: "user" | "assistant"; content: string; at?: string; messageId?: string };
+
+export function recoverParkedLpFromTurns(turns?: ChatTurn[]): PendingLp | undefined {
+  for (const t of [...(turns ?? [])].reverse()) {
+    if (t.role !== "assistant") continue;
+    const c = t.content;
+    if (/No pending quote/.test(c)) continue;
+    if (!/组\s*LP|NVDAB\/USDT|mint LP/i.test(c)) continue;
+    const pair =
+      c.match(/(?:组 LP[^\n]{0,40}（|池：\s*)([A-Z]{2,12})\/([A-Z]{2,12})/) ??
+      c.match(/\*\*组\s*([A-Z]{2,12})\/([A-Z]{2,12})/);
+    const token = pair?.[1] ?? (/NVDAB/.test(c) ? "NVDAB" : undefined);
+    if (!token) continue;
+    const quote = pair?.[2] ?? "USDT";
+    const feeNamed = c.match(/fee\s*=\s*(10000|2500|500|100)/i);
+    const feePct = c.match(/手续费\s*\*?\*?(\d+(?:\.\d+)?)%\*?\*?/);
+    const fee = feeNamed ? Number(feeNamed[1]) : feePct ? Math.round(Number(feePct[1]) * 10_000) : undefined;
+    const budget = c.match(/(?:总)?预算[^\d]{0,24}([\d.]+)\s*USDT/i);
+    const shares = c.match(/全部\s+[A-Z]*\s*([\d.]+)\s*股/) ?? c.match(/全部 NVDAB\s*([\d.]+)/i);
+    const lp: PendingLp = {
+      token,
+      quote,
+      fee,
+      budgetQuoteUi: budget?.[1],
+      amountTokenUi: shares?.[1],
+      rangeBps: 3000,
+    };
+    if (parkedMint(lp)) return lp;
+  }
+  return undefined;
+}
 export type LastIntent = {
   id: string;
   kind: string;
@@ -28,6 +124,16 @@ export type LastIntent = {
   summary?: Record<string, unknown>;
   createdAt: string;
   cancelled?: boolean;
+};
+
+export type LastSettled = {
+  kind: string;
+  intentId: string;
+  at: string;
+  txHashes: string[];
+  pair?: string;
+  tokenId?: string;
+  message: string;
 };
 
 export type HirePhase = "none" | "quoting" | "offered" | "funded" | "working" | "delivered" | "settled";
@@ -64,8 +170,11 @@ export type ConversationState = {
   lastDueWarnAt?: string;
   lastQuote?: PendingQuote;
   lastLp?: PendingLp;
+  pendingPlan?: PendingPlan;
   lastLpCompare?: CompareLpResult;
+  lastLpProposal?: LpProposal;
   lastIntent?: LastIntent;
+  lastSettled?: LastSettled;
   turns?: ChatTurn[];
   seenMessageIds?: string[];
   conversationKind?: string;
@@ -163,10 +272,26 @@ export class ConversationStore {
     return s;
   }
 
+  advanceSwapThenLpAfterSwap(id: string) {
+    const s = this.get(id);
+    if (s.pendingPlan?.kind !== "swap_then_lp") {
+      this.consumeConfirm(id);
+      return this.clearPending(id);
+    }
+    if (s.pendingPlan.phase === "lp") return s;
+    s.pendingPlan = { ...s.pendingPlan, phase: "lp" };
+    delete s.lastQuote;
+    s.userConfirmed = false;
+    this.save(s);
+    return s;
+  }
+
   clearPending(id: string) {
     const s = this.get(id);
     delete s.lastQuote;
     delete s.lastLp;
+    delete s.pendingPlan;
+    delete s.lastLpProposal;
     this.save(s);
     return s;
   }
@@ -176,7 +301,38 @@ export class ConversationStore {
     s.userConfirmed = false;
     delete s.lastQuote;
     delete s.lastLp;
+    delete s.pendingPlan;
+    delete s.lastLpProposal;
     if (s.lastIntent) s.lastIntent = { ...s.lastIntent, cancelled: true };
+    this.save(s);
+    return s;
+  }
+
+  /** Local `pnpm chat` start: drop quotes/plans/transcript, keep wallet + geo + lastSettled. */
+  beginLocalSession(id: string): ConversationState {
+    const s = this.get(id);
+    s.userConfirmed = false;
+    delete s.lastQuote;
+    delete s.lastLp;
+    delete s.pendingPlan;
+    delete s.lastLpProposal;
+    delete s.lastLpCompare;
+    delete s.turns;
+    delete s.pendingAction;
+    delete s.pendingEmptyDelivery;
+    if (s.lastIntent) s.lastIntent = { ...s.lastIntent, cancelled: true };
+    this.save(s);
+    return s;
+  }
+
+  markSettled(id: string, settled: LastSettled): ConversationState {
+    const s = this.get(id);
+    s.lastSettled = settled;
+    s.userConfirmed = false;
+    delete s.lastQuote;
+    delete s.lastLp;
+    delete s.pendingPlan;
+    delete s.lastLpProposal;
     this.save(s);
     return s;
   }
@@ -290,6 +446,7 @@ export function formatRuntimeState(state: ConversationState): string {
     buyer: state.buyer,
     lastQuote: state.lastQuote,
     lastLp: state.lastLp,
+    pendingPlan: state.pendingPlan,
     lastLpCompare: state.lastLpCompare
       ? {
           token: state.lastLpCompare.token,
@@ -316,7 +473,23 @@ export function formatRuntimeState(state: ConversationState): string {
     lastOrderStatus: state.lastOrderStatus,
     lastOfferId: state.lastOfferId,
     lastIntent: state.lastIntent
-      ? { id: state.lastIntent.id, kind: state.lastIntent.kind, signerUrl: state.lastIntent.signerUrl }
+      ? { id: state.lastIntent.id, kind: state.lastIntent.kind, signerUrl: state.lastIntent.signerUrl, cancelled: state.lastIntent.cancelled }
+      : undefined,
+    lastSettled: state.lastSettled
+      ? {
+          kind: state.lastSettled.kind,
+          intentId: state.lastSettled.intentId,
+          tokenId: state.lastSettled.tokenId,
+          pair: state.lastSettled.pair,
+          at: state.lastSettled.at,
+        }
+      : undefined,
+    lastLpProposal: state.lastLpProposal
+      ? {
+          token: state.lastLpProposal.token,
+          selected: state.lastLpProposal.selected,
+          options: state.lastLpProposal.options.map((o) => ({ n: o.n, action: o.action, title: o.title })),
+        }
       : undefined,
   };
   const lines = [
@@ -325,7 +498,37 @@ export function formatRuntimeState(state: ConversationState): string {
   ];
   lines.push(...hirePhaseLines(state));
   const defiReady = canCreateDefiIntent(state);
-  if (state.lastQuote && !defiReady && state.source === "termix") {
+  if (state.lastLpProposal?.options?.length) {
+    if (state.lastLpProposal.selected != null) {
+      lines.push(
+        `User picked LP option ${state.lastLpProposal.selected}. On confirm, execute that option only. Do not revive an old signer page.`,
+      );
+    } else {
+      lines.push(
+        `Numbered LP options are waiting (${state.lastLpProposal.options.length}). If the user sends 1/2/3, that is a pick. A bare 确认 does not mean they want LP — do not call propose_lp or create_lp_intent. Tell them to pick a number or say 组 LP.`,
+      );
+    }
+  }
+  if (state.pendingPlan?.kind === "swap_then_lp") {
+    const p = state.pendingPlan;
+    const lpBit = `${p.lp.token}/${p.lp.quote ?? "USDT"} budget ${p.lp.budgetQuoteUi ?? "?"} fee ${p.lp.fee ?? "default"}`;
+    if (p.phase === "lp") {
+      lines.push(
+        `Two-step plan, current step LP mint: ${lpBit}. Funding swap is on-chain. If lastIntent is already the LP signer page, send that URL. Otherwise create_lp_intent with lastLp immediately — do not ask for another confirm. Do not re-quote the BNB→USDT swap.`,
+      );
+    } else {
+      lines.push(
+        `Two-step plan, current step SWAP: ${p.swap.amountInUi} ${p.swap.tokenIn} → ${p.swap.tokenOut}, then LP ${lpBit}. On confirm, create_swap_intent with pendingPlan.swap (not a stale lastQuote). Do not invent a different amount. If lastIntent is already this unsigned swap, resend that signer URL. After the swap tx is on-chain, the runtime opens the LP signer. 继续 / 已完成 / 签完了 is proceed — return the LP URL or the same swap URL. Do not re-ask them to confirm step 1 or step 2.`,
+      );
+    }
+  } else if (isFundingSwapForLp(state.lastQuote, state.lastLp)) {
+    const q = state.lastQuote!;
+    const lp = state.lastLp!;
+    const lpBit = `${lp.token}/${lp.quote ?? "USDT"} budget ${lp.budgetQuoteUi ?? "?"} fee ${lp.fee ?? "default"}`;
+    lines.push(
+      `Two-step plan, current step SWAP: ${q.amountInUi} ${q.tokenIn} → ${q.tokenOut}, then LP ${lpBit}. On confirm, create_swap_intent then keep lastLp. 继续 / 已完成 after the swap is signed must create_lp_intent, not re-ask.`,
+    );
+  } else if (state.lastQuote && !defiReady && state.source === "termix") {
     lines.push(
       `A swap was mentioned (${state.lastQuote.amountInUi} ${state.lastQuote.tokenIn} → ${state.lastQuote.tokenOut}) but hire is not in working yet. Do not create_swap_intent. Finish the Termix offer/checkout/accept first.`,
     );
@@ -368,6 +571,22 @@ export function formatRuntimeState(state: ConversationState): string {
     lines.push(
       "No pending quote. If the user only says confirm with nothing pending, ask them to restate the token and amount in one sentence. Do not turn it into a questionnaire. On cancel, do not keep asking.",
     );
+  }
+  if (state.lastSettled?.kind?.startsWith("lp")) {
+    const t = state.lastSettled;
+    if (t.kind === "lp-decrease") {
+      lines.push(
+        `Last LP withdraw already settled: ${t.pair ?? "position"} ${t.tokenId ? `was NFT #${t.tokenId}` : ""} intent ${t.intentId}. Report this on 签完了. A new 赎回 / 退出仓位 is a new withdraw — do not replay this note.`,
+      );
+    } else if (t.kind === "lp-collect") {
+      lines.push(
+        `Last fee collect settled: NFT #${t.tokenId ?? "?"} intent ${t.intentId}. Report this on 签完了. 赎回 is a withdraw, not this collect.`,
+      );
+    } else {
+      lines.push(
+        `LP already settled on-chain: ${t.pair ?? "position"} ${t.tokenId ? `NFT #${t.tokenId}` : ""} intent ${t.intentId}. If they say 签完了 / 完成了 / 好了, report this. A bare 确认 is NOT this settlement — it only executes a pending quote / withdraw / collect / mint. 赎回 / 退出仓位 is a new withdraw of that NFT (create_lp_intent decrease), not another mint. Do not open another mint signer or propose_lp unless they ask to 组 LP.`,
+      );
+    }
   }
   if (state.lastIntent?.cancelled) {
     lines.push("The last signer page was cancelled. Do not send that link again.");

@@ -3,11 +3,13 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { getAddress } from "viem";
 import type { Hex } from "viem";
+import { getPublicClient } from "@bstocks/chain";
 import type { ConversationStore } from "./conversation.js";
 import { assertIntentBinding, type IntentStore } from "./intents.js";
 import { getA2AStatus } from "./a2aStatus.js";
 import { serviceFeeLabel } from "./hire.js";
 import { runAgentTurn } from "./llm.js";
+import { maybeContinueSwapThenLpAfterTx, maybeSettleLpAfterTx, type ToolCtx } from "./tools.js";
 
 export function createApp(
   intents: IntentStore,
@@ -38,9 +40,31 @@ export function createApp(
       conversationId?: string;
       text?: string;
       source?: "termix" | "local";
+      reset?: boolean;
     };
     const conversationId = body.conversationId ?? "local";
     const text = body.text ?? "";
+    if (body.reset === true && body.source !== "termix") {
+      extras.conversations.beginLocalSession(conversationId);
+      for (const intent of intents.list()) {
+        if (intent.conversationId !== conversationId || intent.cancelledAt) continue;
+        if (intent.txHashes.length > 0) continue;
+        try {
+          intents.cancel(intent.id);
+        } catch {
+          /* already broadcast or missing */
+        }
+      }
+      if (!text.trim()) {
+        const s = extras.conversations.get(conversationId);
+        const who = s.wallet ? `钱包 ${s.wallet.slice(0, 6)}…${s.wallet.slice(-4)} 仍绑定` : "尚未绑定钱包";
+        const geo = s.geoConfirmed ? "地区声明仍有效" : "尚未做地区声明";
+        return c.json({
+          reply: `本地会话已重置（上一轮报价和对话已丢）。${who}；${geo}。`,
+          state: s,
+        });
+      }
+    }
     extras.conversations.ingestUserText(conversationId, text);
     if (body.source === "termix") {
       const s = extras.conversations.get(conversationId);
@@ -57,6 +81,7 @@ export function createApp(
           intents,
           signerWebUrl: extras.signerWebUrl ?? "http://127.0.0.1:3000",
           dataDir: extras.dataDir ?? ".data",
+          client: getPublicClient(),
         },
         extras.llm,
       );
@@ -81,7 +106,52 @@ export function createApp(
     }
     try {
       const intent = intents.recordTx(c.req.param("id"), body.txHash as Hex, getAddress(body.address));
-      return c.json({ ok: true, intent });
+      const filled = intent.txs.length > 0 && intent.txHashes.length >= intent.txs.length;
+      if (filled && extras?.conversations && intent.conversationId) {
+        const conversations = extras.conversations;
+        const conversationId = intent.conversationId;
+        if (intent.kind === "swap") {
+          void (async () => {
+            try {
+              const ctx: ToolCtx = {
+                conversation: conversations.get(conversationId),
+                conversations,
+                intents,
+                signerWebUrl: extras.signerWebUrl ?? "http://127.0.0.1:3000",
+                dataDir: extras.dataDir ?? ".data",
+                client: getPublicClient(),
+              };
+              const follow = await maybeContinueSwapThenLpAfterTx(ctx, intents.get(intent.id) ?? intent);
+              if (follow.nextSignerUrl) {
+                intents.patch(intent.id, { followUpSignerUrl: follow.nextSignerUrl });
+              } else if (follow.nextError) {
+                intents.patch(intent.id, { followUpError: follow.nextError });
+              }
+            } catch (err) {
+              const message = err instanceof Error ? err.message : String(err);
+              console.error("[swap-then-lp] continue failed", message);
+              intents.patch(intent.id, { followUpError: message });
+            }
+          })();
+        } else if (intent.kind.startsWith("lp")) {
+          void (async () => {
+            try {
+              const ctx: ToolCtx = {
+                conversation: conversations.get(conversationId),
+                conversations,
+                intents,
+                signerWebUrl: extras.signerWebUrl ?? "http://127.0.0.1:3000",
+                dataDir: extras.dataDir ?? ".data",
+                client: getPublicClient(),
+              };
+              await maybeSettleLpAfterTx(ctx, intents.get(intent.id) ?? intent);
+            } catch (err) {
+              console.error("[lp-settle] failed", err instanceof Error ? err.message : err);
+            }
+          })();
+        }
+      }
+      return c.json({ ok: true, intent, continuing: filled && intent.kind === "swap" });
     } catch (err) {
       return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
     }

@@ -11,11 +11,11 @@ loadRepoEnv();
 const base = process.env.RUNTIME_PUBLIC_URL ?? "http://127.0.0.1:8787";
 const conversationId = process.argv[2] ?? "local";
 
-async function send(text: string) {
+async function post(body: Record<string, unknown>) {
   const res = await fetch(`${base}/chat`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ conversationId, text }),
+    body: JSON.stringify(body),
   });
   const raw = await res.text();
   let json: { reply?: string; error?: string; state?: unknown };
@@ -25,12 +25,23 @@ async function send(text: string) {
     throw new Error(`Runtime ${res.status} (not JSON): ${raw.slice(0, 300)}`);
   }
   if (!res.ok) throw new Error(json.error ?? json.reply ?? res.statusText);
+  return json;
+}
+
+async function send(text: string) {
+  const json = await post({ conversationId, text });
   console.log("\n--- Agent ---\n" + (json.reply ?? "") + "\n");
 }
 
 async function main() {
   console.log(`Local Termix chat → ${base}/chat  conversation=${conversationId}`);
-  console.log("Examples: 我确认不在美国及受限地区 / 0x… / 查询一下nvdab的报价 / 用 10 USDT 买英伟达 / 确认执行");
+  try {
+    const boot = await post({ conversationId, reset: true });
+    if (boot.reply) console.log(boot.reply);
+  } catch (err) {
+    console.error("未能重置会话（Runtime 没起来？）", err instanceof Error ? err.message : err);
+  }
+  console.log("Examples: 我确认不在美国及受限地区 / 0x… / 查询一下nvdab的报价 / 用 10 USDT 买英伟达 / 组 LP / 确认执行");
   const rl = createInterface({ input: stdin, output: stdout });
   try {
     while (true) {

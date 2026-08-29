@@ -1,4 +1,5 @@
 import { issueRuntimeToken, pollInbox, replyA2A, signalThinking, walletLogin, type InboxMessage, TermixClient } from "@bstocks/termix";
+import { getPublicClient } from "@bstocks/chain";
 import { getA2AStatus, noteA2A } from "./a2aStatus.js";
 import type { ConversationStore } from "./conversation.js";
 import { acceptFundedOrder, hireEventReply, isSystemHireEvent, refreshHireFromTermix } from "./hire.js";
@@ -120,6 +121,7 @@ async function handleMessage(
     termix,
     agentId: opts.agentId,
     dataDir: opts.dataDir,
+    client: getPublicClient(),
   };
   await refreshHireFromTermix(ctx);
   if (ctx.conversation.hirePhase === "funded" && ctx.conversation.lastOrderId) {

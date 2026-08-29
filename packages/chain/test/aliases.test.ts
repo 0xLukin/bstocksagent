@@ -4,6 +4,8 @@ import {
   formatWhitelistForPrompt,
   getToken,
   isWhitelisted,
+  findWhitelistedTokenInText,
+  resolveSpokenBstock,
 } from "../src/registry.js";
 
 describe("token aliases", () => {
@@ -25,6 +27,11 @@ describe("token aliases", () => {
     expect(isWhitelisted("AAPL")).toBe(false);
     expect(isWhitelisted("bCOIN")).toBe(false);
     expect(() => getToken("NVDA股票")).toThrow(/not on whitelist/);
+  });
+
+  it("extracts NVDAB from messy 的lp speech", () => {
+    expect(resolveSpokenBstock("nvdab的").symbol).toBe("NVDAB");
+    expect(findWhitelistedTokenInText("我想组nvdab的lp 帮我规划最优方案")).toBe("NVDAB");
   });
 
   it("lists aliases for the prompt", () => {
