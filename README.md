@@ -71,6 +71,14 @@ Buyer hires the agent: `quoting` → `offered` → `working` → `delivered` →
 
 Interactive: [hire lifecycle](docs/archify/bstocks-hire.html). Spec: [`bstocks-hire.lifecycle.json`](docs/archify/bstocks-hire.lifecycle.json).
 
+## Hire sequence
+
+Same story as a call chain: buyer ↔ Termix ↔ Runtime for escrow, then buyer → signer → Pancake V3 for the fill, then `submitDelivery` and release.
+
+![bStocks Agent hire sequence](docs/archify/hire-sequence.png)
+
+Interactive: [hire sequence](docs/archify/bstocks-hire-sequence.html). Spec: [`bstocks-hire.sequence.json`](docs/archify/bstocks-hire.sequence.json).
+
 ## Whitelist
 
 Tokens and pools live in `config/tokens.json` and `config/pools.json`, not hardcoded. On-chain `symbol()` was checked on 2026-08-26.
