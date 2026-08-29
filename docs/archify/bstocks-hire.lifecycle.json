@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "diagram_type": "lifecycle",
+  "meta": {
+    "title": "bStocks Agent 雇佣生命周期",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "viewBox": [980, 566],
+    "views": [
+      {
+        "id": "hire-rail",
+        "label": "雇佣主轨",
+        "focus": ["quoting", "offered", "working", "delivered", "settled"],
+        "note": "买家雇 Agent：发卡 → 托管 → 干活 → 交付 → 放款。"
+      },
+      {
+        "id": "provider-accept",
+        "label": "Agent 被雇",
+        "focus": ["offered", "accept", "working"],
+        "note": "买家 checkout 0.01 USDC 后，Watchdog 用 WALLET_KEY 接单。"
+      },
+      {
+        "id": "desk-work",
+        "label": "working 里的功能",
+        "focus": ["working", "signer", "delivered"],
+        "note": "confirm 出签名页；买家自己广播 swap / LP 后再交付。"
+      }
+    ]
+  },
+  "lanes": [
+    { "id": "main", "label": "雇佣主轨" },
+    { "id": "waiting", "label": "接单与功能" }
+  ],
+  "states": [
+    {
+      "id": "quoting",
+      "type": "start",
+      "label": "quoting",
+      "sublabel": "geo 后发卡",
+      "lane": "main",
+      "col": 0,
+      "step": "01",
+      "tag": "hirePhase"
+    },
+    {
+      "id": "offered",
+      "type": "waiting",
+      "label": "offered",
+      "sublabel": "0.01 USDC 卡",
+      "lane": "main",
+      "col": 1,
+      "step": "02",
+      "tag": "buyer"
+    },
+    {
+      "id": "working",
+      "type": "active",
+      "label": "working",
+      "sublabel": "才允许 DeFi",
+      "lane": "main",
+      "col": 2,
+      "step": "03",
+      "tag": "desk"
+    },
+    {
+      "id": "delivered",
+      "type": "waiting",
+      "label": "delivered",
+      "sublabel": "等放款",
+      "lane": "main",
+      "col": 3,
+      "step": "04",
+      "tag": "report"
+    },
+    {
+      "id": "settled",
+      "type": "success",
+      "label": "settled",
+      "sublabel": "托管费入账",
+      "lane": "main",
+      "col": 4,
+      "step": "05",
+      "tag": "done"
+    },
+    {
+      "id": "accept",
+      "type": "active",
+      "label": "provider-accept",
+      "sublabel": "WALLET_KEY",
+      "lane": "waiting",
+      "col": 0,
+      "tag": "agent"
+    },
+    {
+      "id": "signer",
+      "type": "waiting",
+      "label": "signer page",
+      "sublabel": "swap / LP",
+      "lane": "waiting",
+      "col": 1,
+      "tag": "user key"
+    }
+  ],
+  "transitions": [
+    {
+      "id": "t-checkout",
+      "from": "offered",
+      "to": "accept",
+      "label": "checkout 0.01",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t-accept",
+      "from": "accept",
+      "to": "working",
+      "label": "watchdog accept",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t-confirm",
+      "from": "working",
+      "to": "signer",
+      "label": "confirm",
+      "variant": "emphasis"
+    },
+    {
+      "id": "t-broadcast",
+      "from": "signer",
+      "to": "delivered",
+      "label": "用户广播",
+      "variant": "emphasis"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "买家雇 Agent",
+      "items": [
+        "geo → standard offer → 0.01 USDC checkout → working 后才能报价 / 加 LP"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Agent 被雇",
+      "items": [
+        "WALLET_KEY 只做 offer / accept / deliver / claim；SETTLED 后再来一单"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "working 里的功能",
+      "items": [
+        "签名页做 swap / LP；cancel 只撤报价；空交付需 confirm empty delivery"
+      ]
+    }
+  ]
+}

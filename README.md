@@ -53,6 +53,24 @@ The agent **does not** have the user key and does not broadcast user DeFi txs. C
 
 Settlement is Termix escrow in **USDC** (platform default). No BNB Agent Studio, no x402. BSC (chainId 56) and Pancake V3 only. No V2 / Venus / Lista.
 
+## Architecture
+
+Runtime: Termix inbox → hire state machine → intent HTTP → signer page → buyer broadcast on BSC. The agent wallet (`WALLET_KEY`) stays inside the runtime boundary. The buyer key never leaves the wallet / signer page.
+
+![bStocks Agent runtime](docs/archify/runtime.png)
+
+Interactive: [runtime diagram](docs/archify/bstocks-runtime.html). Spec: [`bstocks-runtime.architecture.json`](docs/archify/bstocks-runtime.architecture.json).
+
+## Hire lifecycle
+
+Buyer hires the agent: `quoting` → `offered` → `working` → `delivered` → `settled`. Being hired is the side path: checkout 0.01 USDC → Watchdog `provider-accept` with `WALLET_KEY`. Desk work is the other side path: `confirm` → signer page (swap / LP) → user broadcast → `delivered`.
+
+`funded` sits between checkout and `working`. `cancel` only drops the quote. Empty delivery needs `confirm empty delivery`. After `SETTLED`, `another hire` starts a new cycle. 48h with no release: `claimAfterTimeout`.
+
+![bStocks Agent hire lifecycle](docs/archify/hire-lifecycle.png)
+
+Interactive: [hire lifecycle](docs/archify/bstocks-hire.html). Spec: [`bstocks-hire.lifecycle.json`](docs/archify/bstocks-hire.lifecycle.json).
+
 ## Whitelist
 
 Tokens and pools live in `config/tokens.json` and `config/pools.json`, not hardcoded. On-chain `symbol()` was checked on 2026-08-26.
