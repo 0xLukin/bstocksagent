@@ -177,6 +177,16 @@ async function collectOffers(client: TermixClient, conversationId: string, hintI
   for (const row of walkOffers(convo).map(parseOfferRecord)) {
     if (row.id && !found.some((o) => o.id === row.id)) found.push(row);
   }
+  // /messages returns the oldest page (50). The newest card is on conversation.lastMessage.
+  for (const id of offerIdsInText(
+    JSON.stringify({
+      lastMessage: asRecord(convo).lastMessage,
+      context: asRecord(convo).context,
+      messages: asRecord(convo).messages,
+    }),
+  )) {
+    await tryId(id);
+  }
   try {
     const listed = await client.request(`/api/v1/conversations/${conversationId}/offers`);
     for (const row of walkOffers(listed).map(parseOfferRecord)) {

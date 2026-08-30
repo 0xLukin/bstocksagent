@@ -37,6 +37,7 @@ import {
   getOrder,
   listingDraft,
   listAccountAgents,
+  conversationTailSeq,
   listConversationMessages,
   listConversations,
   listOwnedAgents,
@@ -122,6 +123,11 @@ function sleep(ms: number) {
 
 function messageText(row: Record<string, unknown>): string {
   return typeof row.text === "string" ? row.text : "";
+}
+
+async function freshMessages(client: TermixClient, conversationId: string, afterSeq: number) {
+  const page = await listConversationMessages(client, conversationId, { afterSeq });
+  return (page.items ?? []).map((row) => asRecord(row));
 }
 
 function pickSigner(text: string): string | undefined {
@@ -665,13 +671,11 @@ async function main() {
   if (!state.offerId || !state.revisionId) throw new Error("offerId/revisionId missing");
 
   if (viaAgent && should("offer") && broadcast) {
-    const beforeEarly = await listConversationMessages(buyer, state.conversationId!);
-    const beforeEarlyCount = beforeEarly.items?.length ?? 0;
+    const beforeEarlySeq = await conversationTailSeq(buyer, state.conversationId!);
     await sendConversationMessage(buyer, state.conversationId!, EARLY_BUY_TEXT, state.buyerAgentId);
     console.log("via-agent: offered-phase probe", EARLY_BUY_TEXT);
     const earlyReply = await waitFor("hire_not_ready before checkout", async () => {
-      const msgs = await listConversationMessages(buyer, state.conversationId!);
-      const fresh = (msgs.items ?? []).slice(beforeEarlyCount);
+      const fresh = await freshMessages(buyer, state.conversationId!, beforeEarlySeq);
       const blob = fresh.map(messageText).join("\n");
       if (pickSigner(blob)) {
         throw new Error(`Signer page leaked before checkout: ${blob.slice(0, 240)}`);
@@ -724,6 +728,7 @@ async function main() {
         state.checkoutId = id;
       }
       console.log("checkout session", state.checkoutId);
+      saveState(state);
     }
     if (!state.checkoutId) throw new Error("checkout session missing id");
     let checkout = await getCheckout(buyer, state.checkoutId);
@@ -818,13 +823,11 @@ async function main() {
   }
 
   if (viaAgent && !skipDefi && state.orderId && broadcast) {
-    const before = await listConversationMessages(buyer, state.conversationId!);
-    const beforeCount = before.items?.length ?? 0;
+    const beforeSeq = await conversationTailSeq(buyer, state.conversationId!);
     await sendConversationMessage(buyer, state.conversationId!, BUY_TEXT, state.buyerAgentId);
     console.log("via-agent: sent", BUY_TEXT);
     await waitFor("agent quote", async () => {
-      const msgs = await listConversationMessages(buyer, state.conversationId!);
-      const fresh = (msgs.items ?? []).slice(beforeCount);
+      const fresh = await freshMessages(buyer, state.conversationId!, beforeSeq);
       const hit = fresh.find((m) => {
         const text = messageText(m);
         if (!text || text.trim() === BUY_TEXT) return false;
@@ -838,11 +841,10 @@ async function main() {
       console.log("agent quote\n", text.slice(0, 800));
       return text;
     });
-    const afterQuote = (await listConversationMessages(buyer, state.conversationId!)).items?.length ?? 0;
+    const afterQuoteSeq = await conversationTailSeq(buyer, state.conversationId!);
     await sendConversationMessage(buyer, state.conversationId!, "确认执行", state.buyerAgentId);
     const signerUrl = await waitFor("signer url", async () => {
-      const msgs = await listConversationMessages(buyer, state.conversationId!);
-      const fresh = (msgs.items ?? []).slice(afterQuote);
+      const fresh = await freshMessages(buyer, state.conversationId!, afterQuoteSeq);
       const blob = fresh.map(messageText).join("\n");
       const url = pickSigner(blob);
       if (url) return url;
@@ -864,8 +866,7 @@ async function main() {
     }
     if (viaAgent) {
       console.log("via-agent: asking runtime to submit_termix_delivery…");
-      const beforeAsk = await listConversationMessages(buyer, state.conversationId!);
-      const beforeAskCount = beforeAsk.items?.length ?? 0;
+      const beforeAskSeq = await conversationTailSeq(buyer, state.conversationId!);
       await sendConversationMessage(buyer, state.conversationId!, "请交付", state.buyerAgentId);
       await waitFor("delivery_needs_confirm", async () => {
         const order = await getOrder(buyer, state.orderId!);
@@ -873,8 +874,7 @@ async function main() {
         if (phase === "delivered" || phase === "settled") {
           throw new Error(`Empty delivery submitted on first 请交付 (${order.status})`);
         }
-        const msgs = await listConversationMessages(buyer, state.conversationId!);
-        const blob = (msgs.items ?? []).slice(beforeAskCount).map(messageText).join("\n");
+        const blob = (await freshMessages(buyer, state.conversationId!, beforeAskSeq)).map(messageText).join("\n");
         if (/没做交易也交付|delivery_needs_confirm|signer page is not a fill|No on-chain DeFi hash/i.test(blob)) {
           console.log("first 请交付 stopped\n", blob.slice(0, 600));
           return blob;

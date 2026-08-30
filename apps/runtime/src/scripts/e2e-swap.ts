@@ -9,6 +9,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import { loadRepoEnv } from "@bstocks/chain";
 import {
   buyerWalletKeyOrNull,
+  conversationTailSeq,
   listConversationMessages,
   sendConversationMessage,
   TermixClient,
@@ -78,8 +79,7 @@ async function viaTermix(buyer: string) {
   if (!conversationId) throw new Error("No conversationId. Run termix:e2e-hire first or set TERMIX_CONVERSATION_ID.");
   const client = new TermixClient();
   await walletLogin(client, key);
-  const before = await listConversationMessages(client, conversationId);
-  const beforeCount = before.items?.length ?? 0;
+  const beforeSeq = await conversationTailSeq(client, conversationId);
   console.log("swap via Termix inbox", conversationId);
 
   const send = async (text: string) => {
@@ -92,8 +92,8 @@ async function viaTermix(buyer: string) {
   let quoteReply = "";
   for (let i = 0; i < 24; i++) {
     await new Promise((r) => setTimeout(r, 5000));
-    const msgs = await listConversationMessages(client, conversationId);
-    const fresh = (msgs.items ?? []).slice(beforeCount).filter((m) => messageText(m).length > 20);
+    const msgs = await listConversationMessages(client, conversationId, { afterSeq: beforeSeq });
+    const fresh = (msgs.items ?? []).filter((m) => messageText(m).length > 20);
     const agentish = fresh.find((m) => /NVDAB|英伟达|signer|确认|USDC|报价/i.test(messageText(m)));
     if (agentish) {
       quoteReply = messageText(agentish);
@@ -104,12 +104,12 @@ async function viaTermix(buyer: string) {
   }
   if (!quoteReply) throw new Error("No A2A quote in Termix inbox");
 
-  const afterQuote = (await listConversationMessages(client, conversationId)).items?.length ?? 0;
+  const afterQuoteSeq = await conversationTailSeq(client, conversationId);
   await send("确认执行");
   for (let i = 0; i < 24; i++) {
     await new Promise((r) => setTimeout(r, 5000));
-    const msgs = await listConversationMessages(client, conversationId);
-    const fresh = (msgs.items ?? []).slice(afterQuote);
+    const msgs = await listConversationMessages(client, conversationId, { afterSeq: afterQuoteSeq });
+    const fresh = msgs.items ?? [];
     const url =
       pickSigner(fresh.map(messageText).join("\n")) ??
       (fresh.map((m) => (m as { lastIntent?: { signerUrl?: string } }).lastIntent?.signerUrl).find(Boolean) as
