@@ -7,6 +7,7 @@
     "start": "tsx src/index.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run",
+    "test:range": "vitest run test/range-adjust.test.ts",
     "termix:mint": "tsx src/scripts/mint-agent.ts",
     "termix:listing": "tsx src/scripts/publish-listing.ts",
     "termix:accept": "tsx src/scripts/provider-accept.ts",

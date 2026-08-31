@@ -618,6 +618,8 @@ describe("parseLpOptionNumber", () => {
     expect(parseLpPick("第一个")).toBe(1);
     expect(parseLpPick("确认方案1")).toBe(1);
     expect(parseLpPick("确认 2")).toBe(2);
+    expect(parseLpPick("A")).toBe(1);
+    expect(parseLpPick("确认A")).toBe(1);
     expect(parseLpPick("确认")).toBeNull();
     expect(lpPickWantsExecute("1")).toBe(false);
     expect(lpPickWantsExecute("方案1")).toBe(false);

@@ -277,10 +277,10 @@ export function parseLpPick(text: string): number | null {
   const exact = t.match(/^(?:方案\s*)?([1-4]|[一二三四]|[A-Da-d])[。.!！]?$/i);
   if (exact) return pickDigit(exact[1]!);
   const wrapped = t.match(
-    /^(?:确认|选|选择|要|就选)?\s*方案\s*([1-4]|[一二三四])(?:号)?[。.!！]?$/i,
+    /^(?:确认|选|选择|要|就选)?\s*方案\s*([1-4]|[一二三四]|[A-Da-d])(?:号)?[。.!！]?$/i,
   );
   if (wrapped) return pickDigit(wrapped[1]!);
-  const confirmN = t.match(/^(?:确认|选|选择)\s*([1-4])(?:号|号方案)?[。.!！]?$/i);
+  const confirmN = t.match(/^(?:确认|选|选择)\s*([1-4A-Da-d])(?:号|号方案)?[。.!！]?$/i);
   if (confirmN) return pickDigit(confirmN[1]!);
   if (/^(第一个|方案一)$/i.test(t)) return 1;
   if (/^(第二个|方案二)$/i.test(t)) return 2;

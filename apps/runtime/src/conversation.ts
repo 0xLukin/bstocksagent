@@ -6,6 +6,25 @@ import { latchGeoConfirm, latchUserConfirm } from "@bstocks/risk";
 import { listingDraft, type InboxMessage } from "@bstocks/termix";
 import type { LpProposal } from "./lpPropose.js";
 
+export type RangeAdjustOption = {
+  n: number;
+  letter: string;
+  rangeBps: number;
+  title: string;
+};
+
+export type RangeAdjustProposal = {
+  kind: "range-adjust";
+  tokenId: string;
+  token: string;
+  quote: string;
+  fee?: number;
+  priceLower?: string;
+  priceUpper?: string;
+  options: RangeAdjustOption[];
+  selected?: number;
+};
+
 export type PendingQuote = { tokenIn: string; tokenOut: string; amountInUi: string };
 export type PendingLp = {
   token: string;
@@ -193,6 +212,7 @@ export type ConversationState = {
   pendingPlan?: PendingPlan;
   lastLpCompare?: CompareLpResult;
   lastLpProposal?: LpProposal;
+  lastRangeAdjust?: RangeAdjustProposal;
   lastIntent?: LastIntent;
   lastSettled?: LastSettled;
   turns?: ChatTurn[];
@@ -312,6 +332,7 @@ export class ConversationStore {
     delete s.lastLp;
     delete s.pendingPlan;
     delete s.lastLpProposal;
+    delete s.lastRangeAdjust;
     this.save(s);
     return s;
   }
@@ -323,6 +344,7 @@ export class ConversationStore {
     delete s.lastLp;
     delete s.pendingPlan;
     delete s.lastLpProposal;
+    delete s.lastRangeAdjust;
     if (s.lastIntent) s.lastIntent = { ...s.lastIntent, cancelled: true };
     this.save(s);
     return s;
@@ -336,6 +358,7 @@ export class ConversationStore {
     delete s.lastLp;
     delete s.pendingPlan;
     delete s.lastLpProposal;
+    delete s.lastRangeAdjust;
     delete s.lastLpCompare;
     delete s.turns;
     delete s.pendingAction;
@@ -511,6 +534,14 @@ export function formatRuntimeState(state: ConversationState): string {
           options: state.lastLpProposal.options.map((o) => ({ n: o.n, action: o.action, title: o.title })),
         }
       : undefined,
+    lastRangeAdjust: state.lastRangeAdjust
+      ? {
+          tokenId: state.lastRangeAdjust.tokenId,
+          token: state.lastRangeAdjust.token,
+          selected: state.lastRangeAdjust.selected,
+          options: state.lastRangeAdjust.options.map((o) => ({ n: o.n, letter: o.letter, rangeBps: o.rangeBps })),
+        }
+      : undefined,
   };
   const lines = [
     "This is the Termix conversation memory card (persisted by conversationId). Inbox sends only the new message, no history. These slots plus recent turns are the context. Do not treat the user as new.",
@@ -518,6 +549,19 @@ export function formatRuntimeState(state: ConversationState): string {
   ];
   lines.push(...hirePhaseLines(state));
   const defiReady = canCreateDefiIntent(state);
+  if (state.lastRangeAdjust?.options?.length) {
+    const adj = state.lastRangeAdjust;
+    if (adj.selected != null) {
+      const opt = adj.options.find((o) => o.n === adj.selected);
+      lines.push(
+        `User picked range ${opt?.letter ?? adj.selected} (${opt ? `±${opt.rangeBps / 100}%` : ""}) for NFT #${adj.tokenId}. First step is withdraw 100%. On confirm, create_lp_intent with lastLp.decreaseTokenId. Do not say there is no pending quote.`,
+      );
+    } else {
+      lines.push(
+        `Range-adjust options are waiting for NFT #${adj.tokenId}. If the user sends A/B or 1/2, that is a pick. A bare 确认 does not withdraw yet — tell them to pick A or B.`,
+      );
+    }
+  }
   if (state.lastLpProposal?.options?.length) {
     if (state.lastLpProposal.selected != null) {
       lines.push(
@@ -580,6 +624,8 @@ export function formatRuntimeState(state: ConversationState): string {
     lines.push(
       `Pending LP mint: ${size}${pool ? ` · ${pool}` : ""}. On confirm, call create_lp_intent with lastLp token/quote/fee. Do not re-ask the action type. Do not revert to the default USDT 2500 pool.`,
     );
+  } else if (state.lastRangeAdjust?.options?.length) {
+    /* A/B range pick already described above. Do not say there is no pending quote. */
   } else if (state.lastLpCompare) {
     const top = state.lastLpCompare.highestApr;
     lines.push(

@@ -10,7 +10,16 @@ import {
   type CompareLpResult,
 } from "@bstocks/chain";
 import { isUserCancel, isUserConfirm } from "@bstocks/risk";
-import { nextConfirmKind, type PendingLp, type PendingQuote, isFundingSwapForLp, isBuyThenLp, latchSwapThenLpPlan, parkedMint } from "./conversation.js";
+import {
+  nextConfirmKind,
+  type PendingLp,
+  type PendingQuote,
+  type RangeAdjustProposal,
+  isFundingSwapForLp,
+  isBuyThenLp,
+  latchSwapThenLpPlan,
+  parkedMint,
+} from "./conversation.js";
 import { serviceFeeLabel } from "./hire.js";
 import { runTool, continueSwapThenLp, maybeSettleLpAfterTx, intentFilled, lpSignerIsReusable, type ToolCtx } from "./tools.js";
 import { lpPickWantsExecute, parseLpPick as parseLpOptionNumber } from "./lpPropose.js";
@@ -43,6 +52,7 @@ export type LocalCmd =
   | { kind: "cancel" }
   | { kind: "hire-offer" }
   | { kind: "deliver" }
+  | { kind: "range-adjust"; token?: string; tokenId?: string }
   | { kind: "none" };
 
 /** Cancel/confirm/positions/collect/withdraw stay rule-based. Other parsed intents go to the LLM when a key is set. */
@@ -60,7 +70,8 @@ export function bypassLlm(kind: LocalCmd["kind"], hasLlm: boolean): boolean {
     kind === "amend-pay" ||
     kind === "requote" ||
     kind === "quote" ||
-    kind === "price"
+    kind === "price" ||
+    kind === "range-adjust"
   ) {
     return true;
   }
@@ -296,7 +307,7 @@ export async function applyLpPick(ctx: ToolCtx, n: number): Promise<string> {
     amountTokenUi: opt.amountTokenUi,
     amountQuoteUi: opt.amountQuoteUi,
     budgetQuoteUi: opt.budgetQuoteUi,
-    rangeBps: DEFAULT_LP_RANGE_BPS,
+    rangeBps: selectedRangeBps(ctx) ?? DEFAULT_LP_RANGE_BPS,
     committed: true,
   });
   return JSON.stringify({
@@ -305,10 +316,87 @@ export async function applyLpPick(ctx: ToolCtx, n: number): Promise<string> {
   });
 }
 
-export async function applyLpPickFromText(ctx: ToolCtx, text: string): Promise<string | null> {
-  const pick = parseLpOptionNumber(text);
-  if (pick == null || !ctx.conversation.lastLpProposal) return null;
-  const raw = await applyLpPick(ctx, pick);
+export const RANGE_WIDEN_OPTIONS: RangeAdjustProposal["options"] = [
+  { n: 1, letter: "A", rangeBps: 5000, title: "±50%（5000 bps）" },
+  { n: 2, letter: "B", rangeBps: 10000, title: "±100%（10000 bps）" },
+];
+
+function parseSpokenNftId(text: string): string | undefined {
+  const m = text.match(/#\s*(\d{4,10})|NFT\s*#?\s*(\d{4,10})|仓位\s*#?\s*(\d{4,10})/i);
+  return m?.[1] ?? m?.[2] ?? m?.[3];
+}
+
+export function parseRangeAdjustSpeech(text: string): { token?: string; tokenId?: string } | null {
+  const t = text.trim();
+  if (/(?:组|加)\s*(?:个)?(?:lp|池)/i.test(t) && !/区间|range/i.test(t)) return null;
+  if (/^(?:赎回|退出仓位|收手续费|加仓)/i.test(t)) return null;
+  const hit =
+    /(?:调整|改|换|扩宽|拉宽|变宽|调宽|widen|adjust).{0,16}(?:区间|range)/i.test(t) ||
+    /(?:区间|range).{0,16}(?:变宽|调宽|宽一点|宽一些|widen|wider)/i.test(t) ||
+    /重新?(?:开|组|做).{0,10}(?:更宽|宽一点).{0,8}(?:区间|range)/i.test(t);
+  if (!hit) return null;
+  const tokenId = parseSpokenNftId(t);
+  return { token: findWhitelistedTokenInText(t), ...(tokenId ? { tokenId } : {}) };
+}
+
+export function recoverRangeAdjustFromTurns(
+  turns?: Array<{ role: string; content: string }>,
+): RangeAdjustProposal | undefined {
+  for (const t of [...(turns ?? [])].reverse()) {
+    if (t.role === "user" && isUserCancel(t.content)) return undefined;
+    if (t.role === "assistant" && /Cancelled\.|Nothing was broadcast/i.test(t.content)) return undefined;
+    if (t.role !== "assistant") continue;
+    const id = t.content.match(/#(\d{4,})/);
+    if (!id?.[1]) continue;
+    if (!/区间|range|变宽|±\s*50%|±\s*100%|方案\s*[AB]/i.test(t.content)) continue;
+    const token = findWhitelistedTokenInText(t.content) ?? "CRCLB";
+    const quote = /USDT/i.test(t.content) ? "USDT" : /USDC/i.test(t.content) ? "USDC" : "USDT";
+    return {
+      kind: "range-adjust",
+      tokenId: id[1],
+      token,
+      quote,
+      options: RANGE_WIDEN_OPTIONS.map((o) => ({ ...o })),
+    };
+  }
+  return undefined;
+}
+
+export async function applyRangePick(ctx: ToolCtx, n: number): Promise<string> {
+  let prop = ctx.conversation.lastRangeAdjust;
+  if (!prop?.options?.length) {
+    return JSON.stringify({ error: "no_pending", message: "没有待选的调区间方案。请先说「把 CRCL 区间调宽」。" });
+  }
+  const opt = prop.options.find((o) => o.n === n);
+  if (!opt) {
+    return JSON.stringify({ error: "no_pending", message: `没有方案 ${n}。请回复 A / B。` });
+  }
+  prop = { ...prop, selected: n };
+  ctx.conversation.lastRangeAdjust = prop;
+  rememberLp(ctx, {
+    token: prop.token,
+    decreaseTokenId: prop.tokenId,
+    decreaseBps: 10_000,
+  });
+  ctx.conversation.lastRangeAdjust = prop;
+  ctx.conversations.save(ctx.conversation);
+  return JSON.stringify({
+    kind: "range-picked",
+    message: [
+      `已记下方案 ${opt.letter}：新区间 ${opt.title}。`,
+      `第一步赎回仓位 #${prop.tokenId}（${prop.token}/${prop.quote}）全部流动性。`,
+      "回复「确认」出第一步赎回签名页。签完后再说「继续」用新区间重开（不是投资建议）。",
+    ].join("\n"),
+  });
+}
+
+function selectedRangeBps(ctx: ToolCtx): number | undefined {
+  const adj = ctx.conversation.lastRangeAdjust;
+  if (adj?.selected == null) return undefined;
+  return adj.options.find((o) => o.n === adj.selected)?.rangeBps;
+}
+
+async function applyPickAndMaybeExecute(ctx: ToolCtx, text: string, raw: string): Promise<string> {
   if (!lpPickWantsExecute(text)) return raw;
   try {
     const parsed = JSON.parse(raw) as { error?: string };
@@ -320,6 +408,29 @@ export async function applyLpPickFromText(ctx: ToolCtx, text: string): Promise<s
   ctx.conversations.save(ctx.conversation);
   const executed = await runLocalCommand("确认执行", ctx);
   return executed ?? raw;
+}
+
+export async function applyLpPickFromText(ctx: ToolCtx, text: string): Promise<string | null> {
+  const pick = parseLpOptionNumber(text);
+  if (pick == null) return null;
+  if (!ctx.conversation.lastRangeAdjust && !ctx.conversation.lastLpProposal) {
+    const recovered = recoverRangeAdjustFromTurns(ctx.conversation.turns);
+    if (recovered) {
+      ctx.conversation.lastRangeAdjust = recovered;
+      ctx.conversations.save(ctx.conversation);
+    }
+  }
+  const rangeOpen = Boolean(ctx.conversation.lastRangeAdjust && ctx.conversation.lastRangeAdjust.selected == null);
+  if (rangeOpen && ctx.conversation.lastRangeAdjust) {
+    return applyPickAndMaybeExecute(ctx, text, await applyRangePick(ctx, pick));
+  }
+  if (ctx.conversation.lastLpProposal) {
+    return applyPickAndMaybeExecute(ctx, text, await applyLpPick(ctx, pick));
+  }
+  if (ctx.conversation.lastRangeAdjust) {
+    return applyPickAndMaybeExecute(ctx, text, await applyRangePick(ctx, pick));
+  }
+  return null;
 }
 
 export function rememberLp(ctx: ToolCtx, lp: PendingLp) {
@@ -840,7 +951,7 @@ export function formatToolReply(raw: string, opts?: { zh?: boolean }): string {
         : ["", "Reply with 1 / 2 / 3. Confirm after you pick. Cancel with 取消.", "Pool 24h fee APR is not your return. IL applies."];
       return [...head, ...lines, ...tail].filter(Boolean).join("\n");
     }
-    if (data.kind === "lp-picked" && data.message) {
+    if ((data.kind === "lp-picked" || data.kind === "range-picked" || data.kind === "range-adjust") && data.message) {
       return String(data.message);
     }
     if (data.kind === "lp-settled" && data.message) {
@@ -949,6 +1060,7 @@ export function cancelPendingTrade(ctx: ToolCtx): string {
     Boolean(ctx.conversation.lastQuote) ||
     Boolean(ctx.conversation.lastLp) ||
     Boolean(ctx.conversation.pendingPlan) ||
+    Boolean(ctx.conversation.lastRangeAdjust) ||
     Boolean(ctx.conversation.lastIntent && !ctx.conversation.lastIntent.cancelled);
   const intentId = ctx.conversation.lastIntent?.cancelled ? undefined : ctx.conversation.lastIntent?.id;
   if (intentId) {
@@ -964,6 +1076,7 @@ export function cancelPendingTrade(ctx: ToolCtx): string {
   ctx.conversation.userConfirmed = next.userConfirmed;
   delete ctx.conversation.lastQuote;
   delete ctx.conversation.lastLp;
+  delete ctx.conversation.lastRangeAdjust;
   ctx.conversation.lastIntent = next.lastIntent;
   if (!had) return "There is no pending quote or signer page.";
   return [
@@ -1058,6 +1171,14 @@ export function parseLocalCommand(text: string): LocalCmd {
   const amended = parseAmendSpeech(t);
   if (amended) return amended;
   if (isPositionsSpeech(t)) return { kind: "positions" };
+  const rangeAdj = parseRangeAdjustSpeech(t);
+  if (rangeAdj) {
+    return {
+      kind: "range-adjust",
+      ...(rangeAdj.token ? { token: rangeAdj.token } : {}),
+      ...(rangeAdj.tokenId ? { tokenId: rangeAdj.tokenId } : {}),
+    };
+  }
   const spokenLp = parseAddLp(t);
   if (spokenLp) {
     return {
@@ -1153,7 +1274,14 @@ type ListedPos = {
   amount1Ui?: string;
   markUsd?: string;
   feesUsdApprox?: string;
+  priceLower?: string;
+  priceUpper?: string;
 };
+
+function positionQuote(pos: { token0: string; token1: string }): string {
+  const stock = positionBstock(pos);
+  return pos.token0 === stock ? pos.token1 : pos.token0;
+}
 
 function positionBstock(pos: { token0: string; token1: string }): string {
   for (const s of [pos.token0, pos.token1]) {
@@ -1217,6 +1345,39 @@ function pendingManageKind(
   return undefined;
 }
 
+function lastUserPickAfterCancel(turns?: Array<{ role: string; content: string }>): number | null {
+  for (const t of [...(turns ?? [])].reverse()) {
+    if (t.role === "user" && isUserCancel(t.content)) return null;
+    if (t.role !== "user") continue;
+    const n = parseLpOptionNumber(t.content);
+    if (n != null) return n;
+  }
+  return null;
+}
+
+async function remintAfterRangeWithdraw(ctx: ToolCtx): Promise<string | null> {
+  const adj = ctx.conversation.lastRangeAdjust;
+  if (adj?.selected == null) return null;
+  if (pendingManageKind(ctx.conversation.lastLp)) return null;
+  const settled = ctx.conversation.lastSettled;
+  const last = ctx.conversation.lastIntent;
+  const lastStored = last?.id ? ctx.intents.get(last.id) : undefined;
+  const decreaseDone =
+    settled?.kind === "lp-decrease" || (lastStored?.kind === "lp-decrease" && intentFilled(lastStored));
+  if (!decreaseDone) return null;
+  if (settled?.tokenId && settled.tokenId !== adj.tokenId) return null;
+  const opt = adj.options.find((o) => o.n === adj.selected);
+  if (!opt) return null;
+  rememberLp(ctx, {
+    token: adj.token,
+    quote: adj.quote,
+    fee: adj.fee,
+    rangeBps: opt.rangeBps,
+    committed: true,
+  });
+  return runTool("propose_lp", JSON.stringify({ token: adj.token, rangeBps: opt.rangeBps }), ctx);
+}
+
 async function resumePendingExecution(ctx: ToolCtx, kind: "confirm" | "proceed"): Promise<string | null> {
   const plan = ctx.conversation.pendingPlan;
   const last = ctx.conversation.lastIntent;
@@ -1262,8 +1423,17 @@ async function resumePendingExecution(ctx: ToolCtx, kind: "confirm" | "proceed")
     return null;
   }
 
+  if (!managing) {
+    const remint = await remintAfterRangeWithdraw(ctx);
+    if (remint) return remint;
+  }
+
   if (lastStored?.kind?.startsWith("lp") && intentFilled(lastStored) && kind === "proceed" && !managing) {
+    const remint = await remintAfterRangeWithdraw(ctx);
+    if (remint) return remint;
     const settled = await maybeSettleLpAfterTx(ctx, lastStored);
+    const remintAfterSettle = await remintAfterRangeWithdraw(ctx);
+    if (remintAfterSettle) return remintAfterSettle;
     return JSON.stringify({
       kind: "lp-settled",
       message: settled.settledNote ?? ctx.conversation.lastSettled?.message,
@@ -1274,6 +1444,8 @@ async function resumePendingExecution(ctx: ToolCtx, kind: "confirm" | "proceed")
   }
 
   if (kind === "proceed" && ctx.conversation.lastSettled && !plan && !managing) {
+    const remint = await remintAfterRangeWithdraw(ctx);
+    if (remint) return remint;
     const t = ctx.conversation.lastSettled;
     return JSON.stringify({ kind: "lp-settled", message: t.message, tokenId: t.tokenId, pair: t.pair, intentId: t.intentId });
   }
@@ -1319,6 +1491,26 @@ async function resumePendingExecution(ctx: ToolCtx, kind: "confirm" | "proceed")
       if (plan?.kind === "swap_then_lp" && !intentFilled(swapIntent)) return null;
       return noPendingJson();
     }
+  }
+
+  if (!ctx.conversation.lastRangeAdjust) {
+    const recovered = recoverRangeAdjustFromTurns(ctx.conversation.turns);
+    if (recovered) {
+      ctx.conversation.lastRangeAdjust = recovered;
+      ctx.conversations.save(ctx.conversation);
+    }
+  }
+  const rangeAdj = ctx.conversation.lastRangeAdjust;
+  if (kind === "confirm" && rangeAdj?.options?.length && rangeAdj.selected == null && !managing) {
+    const lastPick = lastUserPickAfterCancel(ctx.conversation.turns);
+    if (lastPick != null) {
+      await applyRangePick(ctx, lastPick);
+      return null;
+    }
+    return JSON.stringify({
+      error: "no_pending",
+      message: "先回复 A / B 选新区间，再回复「确认」出第一步赎回签名页。",
+    });
   }
 
   const prop = ctx.conversation.lastLpProposal;
@@ -1391,6 +1583,46 @@ export async function runLocalCommand(text: string, ctx: ToolCtx): Promise<strin
 
   if (cmd.kind === "positions") {
     return runTool("list_positions", "{}", ctx);
+  }
+
+  if (cmd.kind === "range-adjust") {
+    const pos = await pickPosition(ctx, cmd.tokenId, cmd.token ?? findWhitelistedTokenInText(text));
+    const stock = positionBstock(pos);
+    const quote = positionQuote(pos);
+    const prop: RangeAdjustProposal = {
+      kind: "range-adjust",
+      tokenId: pos.tokenId,
+      token: stock,
+      quote,
+      fee: pos.fee,
+      priceLower: pos.priceLower,
+      priceUpper: pos.priceUpper,
+      options: RANGE_WIDEN_OPTIONS.map((o) => ({ ...o })),
+    };
+    ctx.conversation.lastRangeAdjust = prop;
+    delete ctx.conversation.lastQuote;
+    ctx.conversation.userConfirmed = false;
+    ctx.conversations.save(ctx.conversation);
+    const cur =
+      pos.priceLower && pos.priceUpper ? `${pos.priceLower} – ${pos.priceUpper}` : "当前区间";
+    return JSON.stringify({
+      kind: "range-adjust",
+      tokenId: pos.tokenId,
+      token: stock,
+      quote,
+      fee: pos.fee,
+      priceLower: pos.priceLower,
+      priceUpper: pos.priceUpper,
+      options: prop.options,
+      message: [
+        `可以。仓位 #${pos.tokenId}（${pos.token0}/${pos.token1}${pos.fee != null ? ` ${(pos.fee / 10000).toFixed(2)}%` : ""}）现在大约 ${cur}。`,
+        "链上 NFT 不能改 tick，只能先赎回 100%，再用更宽区间重开（两步都要你签名）。",
+        "",
+        ...prop.options.map((o) => `${o.letter}. ${o.title}`),
+        "",
+        "回复 A 或 B。选完后回复「确认」出第一步赎回签名页。不是投资建议。",
+      ].join("\n"),
+    });
   }
 
   if (cmd.kind === "collect") {
