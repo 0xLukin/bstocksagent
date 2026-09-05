@@ -19,6 +19,7 @@ import {
   wantsLpFollowUp,
   type IntentView,
 } from "../../../lib/intentView";
+import { connectErrorMessage, getInjectedProvider } from "../../../lib/injected";
 import { cancelIntent, fetchIntent, reportTx, type RemoteIntent } from "../../../lib/runtime";
 import { simulateIntentTxs, type LiveSim } from "../../../lib/simulate";
 
@@ -209,11 +210,15 @@ export function SignerClient({ intentId }: { intentId: string }) {
   const [settledNote, setSettledNote] = useState("");
   const [sim, setSim] = useState<LiveSim>({ status: "running", notes: [] });
   const { address, isConnected, chainId } = useAccount();
-  const { connect, connectors, isPending } = useConnect();
+  const { connectAsync, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
   const { switchChain } = useSwitchChain();
   const { sendTransactionAsync, isPending: sending } = useSendTransaction();
   const publicClient = usePublicClient({ chainId: 56 });
+
+  useEffect(() => {
+    getInjectedProvider();
+  }, []);
 
   useEffect(() => {
     fetchIntent(intentId)
@@ -385,9 +390,18 @@ export function SignerClient({ intentId }: { intentId: string }) {
     }
   }
 
-  function connectWallet() {
+  async function connectWallet() {
     const injected = connectors.find((c) => c.id === "injected") ?? connectors[0];
-    if (injected) connect({ connector: injected, chainId: bsc.id });
+    if (!injected) {
+      setError("没有可用的钱包连接器。");
+      return;
+    }
+    try {
+      setError("");
+      await connectAsync({ connector: injected, chainId: bsc.id });
+    } catch (e) {
+      setError(connectErrorMessage(e));
+    }
   }
 
   if (error && !intent) {
@@ -532,7 +546,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
                 断开
               </button>
             ) : (
-              <button type="button" className="linkish" disabled={isPending} onClick={connectWallet}>
+              <button type="button" className="linkish" disabled={isPending} onClick={() => void connectWallet()}>
                 {isPending ? "连接中" : "连接"}
               </button>
             )}
@@ -568,7 +582,7 @@ export function SignerClient({ intentId }: { intentId: string }) {
       {!cancelled && (
         <div className="actions">
           {!isConnected ? (
-            <button className="primary" disabled={isPending || ttl.expired} onClick={connectWallet}>
+            <button className="primary" disabled={isPending || ttl.expired} onClick={() => void connectWallet()}>
               {isPending ? "等待钱包" : "连接钱包"}
             </button>
           ) : (
@@ -580,6 +594,9 @@ export function SignerClient({ intentId }: { intentId: string }) {
             {cancelling ? "取消中" : "取消"}
           </button>
         </div>
+      )}
+      {!isConnected && !cancelled && (
+        <p className="hint">点连接后应弹出 OKX / MetaMask。若没弹窗，用钱包内置浏览器打开此链接。</p>
       )}
 
       <RawToggle>
