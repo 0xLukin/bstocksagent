@@ -1,4 +1,4 @@
-import { issueRuntimeToken, pollInbox, replyA2A, signalThinking, walletLogin, type InboxMessage, TermixClient } from "@bstocks/termix";
+import { ensureConversationReply, issueRuntimeToken, pollInbox, signalThinking, walletLogin, type InboxMessage, TermixClient } from "@bstocks/termix";
 import { getPublicClient } from "@bstocks/chain";
 import { getA2AStatus, noteA2A } from "./a2aStatus.js";
 import type { ConversationStore } from "./conversation.js";
@@ -136,9 +136,11 @@ async function handleMessage(
     const reply = hireEventReply(ctx.conversation);
     opts.conversations.appendTurn(msg.conversationId, "user", text || `[${msg.kind ?? "event"}]`, msg.messageId);
     opts.conversations.appendTurn(msg.conversationId, "assistant", reply);
-    await replyA2A(termix, msg.conversationId, reply);
+    const via = await ensureConversationReply(termix, msg.conversationId, reply, opts.agentId);
+    if (via === "session") console.warn("[a2a] lastMessage stale after runtime/reply; sent via session API");
     return;
   }
   const reply = await runAgentTurn(text, ctx, opts.llm);
-  await replyA2A(termix, msg.conversationId, reply);
+  const via = await ensureConversationReply(termix, msg.conversationId, reply, opts.agentId);
+  if (via === "session") console.warn("[a2a] lastMessage stale after runtime/reply; sent via session API");
 }
